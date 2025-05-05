@@ -15,12 +15,13 @@
  */
 package com.embabel.agent.eval.runner
 
+import com.embabel.agent.config.models.OpenAiModels
+import com.embabel.agent.eval.assert.AssertionEvaluator
+import com.embabel.agent.eval.client.AgentChatClient
 import com.embabel.agent.eval.support.DefaultEvaluationResultScorer
 import com.embabel.agent.eval.support.EvaluationJob
 import com.embabel.agent.eval.support.EvaluationOptions
 import com.embabel.agent.eval.support.EvaluationRunner
-import com.embabel.agent.eval.assert.AssertionEvaluator
-import com.embabel.agent.eval.client.AgentChatClient
 import com.embabel.textio.template.TemplateRenderer
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -52,7 +53,7 @@ class EvalApplicationRunner(
     private var file: String = "data/eval/agent.yml"
 
     @Value("\${model}")
-    private var model: String = "gpt-4o-mini"
+    private var model: String = OpenAiModels.GPT_41_MINI
 
     private val evaluationRunner: EvaluationRunner = DefaultEvaluationRunner(
         evaluatorChatModel = evaluatorChatModel,
