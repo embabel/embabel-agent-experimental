@@ -15,7 +15,7 @@
  */
 package com.embabel.agent.eval.runner
 
-import com.embabel.agent.eval.*
+import com.embabel.agent.config.models.OpenAiModels
 import com.embabel.agent.eval.assert.AssertionEvaluator
 import com.embabel.agent.eval.client.*
 import com.embabel.agent.eval.support.*
@@ -192,7 +192,7 @@ class DefaultEvaluationRunner(
         sessionId: String,
     ): ChatRequest {
         val chatOptions = ChatOptions.builder()
-            .model("gpt-4o")
+            .model(OpenAiModels.GPT_41_MINI)
             .temperature(evaluationInProgress.job.evaluator.temperature)
             .build()
         val systemPrompt = templateRenderer.renderLoadedTemplate(
