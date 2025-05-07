@@ -19,7 +19,7 @@ import com.embabel.agent.config.models.OpenAiModels
 import com.embabel.agent.eval.assert.AssertionEvaluator
 import com.embabel.agent.eval.client.*
 import com.embabel.agent.eval.support.*
-import com.embabel.textio.template.TemplateRenderer
+import com.embabel.common.textio.template.TemplateRenderer
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.client.ChatClient

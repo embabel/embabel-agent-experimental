@@ -22,7 +22,7 @@ import com.embabel.agent.eval.support.DefaultEvaluationResultScorer
 import com.embabel.agent.eval.support.EvaluationJob
 import com.embabel.agent.eval.support.EvaluationOptions
 import com.embabel.agent.eval.support.EvaluationRunner
-import com.embabel.textio.template.TemplateRenderer
+import com.embabel.common.textio.template.TemplateRenderer
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.model.ChatModel

@@ -15,8 +15,8 @@
  */
 package com.embabel.agent.eval.config
 
-import com.embabel.textio.template.JinjavaTemplateRenderer
-import com.embabel.textio.template.TemplateRenderer
+import com.embabel.common.textio.template.JinjavaTemplateRenderer
+import com.embabel.common.textio.template.TemplateRenderer
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 
