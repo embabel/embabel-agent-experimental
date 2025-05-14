@@ -29,6 +29,16 @@
             <artifactId>spring-data-neo4j</artifactId>
         </dependency>
 
+        <dependency>
+           <groupId>org.jetbrains.kotlin</groupId>
+           <artifactId>kotlin-compiler</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-scripting-compiler</artifactId>
+        </dependency>
+
        <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-scripting-common</artifactId>
