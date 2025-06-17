@@ -20,6 +20,7 @@ import com.embabel.agent.eval.assert.AssertionEvaluator
 import com.embabel.agent.eval.client.*
 import com.embabel.agent.eval.support.*
 import com.embabel.common.textio.template.TemplateRenderer
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.client.ChatClient
@@ -230,7 +231,8 @@ class DefaultEvaluationRunner(
             mapOf(
                 "config" to evaluationRun.job,
                 "transcript" to evaluationRun.transcript,
-                "example" to jacksonObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(SCORES_EXAMPLE),
+                "example" to jacksonObjectMapper().registerModule(JavaTimeModule()).writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(SCORES_EXAMPLE),
             )
         )
         val chatClient = ChatClient
