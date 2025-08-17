@@ -18,7 +18,6 @@ package com.embabel.agent.discord
 import com.embabel.agent.api.common.Asyncer
 import com.embabel.agent.api.common.autonomy.Autonomy
 import com.embabel.agent.api.common.autonomy.DefaultPlanLister
-import com.embabel.agent.api.common.autonomy.GoalChoiceApprover
 import com.embabel.agent.api.common.autonomy.ProcessWaitingException
 import com.embabel.agent.core.ProcessOptions
 import com.embabel.chat.AssistantMessage
@@ -42,7 +41,6 @@ class AgentPlatformChatSessionEventListener(
     private val logger = LoggerFactory.getLogger(AgentPlatformChatSessionEventListener::class.java)
 
     override fun onMessageReceived(event: MessageReceivedEvent) {
-        // Ignore bot messages
         if (event.author.isBot) {
             return
         }
@@ -56,26 +54,30 @@ class AgentPlatformChatSessionEventListener(
             respondToDm(event, session)
             return
         } else {
-            logger.info(
-                "User {} sent a message in channel {} at {}}",
-                session.user, session.channelId, session.lastActivity
-            )
+            reactToChannelMessage(event, session)
         }
+    }
+
+    private fun reactToChannelMessage(
+        event: MessageReceivedEvent,
+        session: DiscordUserSession,
+    ) {
+        logger.info(
+            "User {} sent a message in channel {} at {}}",
+            session.user, session.channelId, session.lastActivity,
+        )
     }
 
     private fun respondToDm(
         event: MessageReceivedEvent,
         discordUserSession: DiscordUserSession,
     ) {
-        // Handle direct message response logic here
         logger.info("Responding to DM from user: ${discordUserSession.user}")
         val chatSession = chatSessionFor(discordUserSession)
         asyncer.async {
             chatSession.respond(
-                UserMessage(
-                    content = event.message.contentRaw,
-                ),
-                ChannelRespondingMessageListener(event),
+                userMessage = UserMessage(content = event.message.contentRaw),
+                additionalListener = ChannelRespondingMessageListener(event),
             )
         }
     }
@@ -83,12 +85,9 @@ class AgentPlatformChatSessionEventListener(
     private fun chatSessionFor(discordUserSession: DiscordUserSession): AgentPlatformChatSession {
         return discordUserSession.sessionData.getOrPut("chatSession") {
             AgentPlatformChatSession(
-                autonomy = autonomy,
                 planLister = DefaultPlanLister(autonomy.agentPlatform),
-                // Doesn't matter
-                goalChoiceApprover = GoalChoiceApprover.APPROVE_ALL,
                 processOptions = ProcessOptions(),
-                processWaitingHandler = DiscordProcessWaitingHandler(),
+                messageListener = {},
                 responseGenerator = AgentResponseGenerator(
                     agentPlatform = autonomy.agentPlatform,
                     agent = DefaultChatAgentBuilder(
@@ -111,6 +110,10 @@ class DiscordProcessWaitingHandler : ProcessWaitingHandler {
     }
 }
 
+/**
+ * Listens for Embabel messages and responds in the same channel
+ * as the given Discord event.
+ */
 class ChannelRespondingMessageListener(
     private val event: MessageReceivedEvent,
 ) : MessageListener {
