@@ -16,29 +16,28 @@
 package com.embabel.agent.discord
 
 import com.embabel.agent.api.common.Asyncer
-import com.embabel.agent.api.common.autonomy.Autonomy
-import com.embabel.agent.api.common.autonomy.DefaultPlanLister
 import com.embabel.agent.api.common.autonomy.ProcessWaitingException
-import com.embabel.agent.core.ProcessOptions
-import com.embabel.chat.AssistantMessage
-import com.embabel.chat.Message
-import com.embabel.chat.MessageListener
-import com.embabel.chat.UserMessage
-import com.embabel.chat.agent.*
+import com.embabel.chat.*
+import com.embabel.chat.agent.ProcessWaitingHandler
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent
 import net.dv8tion.jda.api.hooks.ListenerAdapter
 import org.slf4j.LoggerFactory
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.stereotype.Component
 
+/**
+ * SessionEventListener that uses an Embabel Chatbot
+ */
 @Component
-class AgentPlatformChatSessionEventListener(
+@ConditionalOnBean(Chatbot::class)
+class ChatbotSessionEventListener(
     private val discordSessionService: DiscordSessionService,
-    private val autonomy: Autonomy,
+    private val chatbot: Chatbot,
     private val asyncer: Asyncer,
     private val discordConfigProperties: DiscordConfigProperties,
 ) : ListenerAdapter() {
 
-    private val logger = LoggerFactory.getLogger(AgentPlatformChatSessionEventListener::class.java)
+    private val logger = LoggerFactory.getLogger(ChatbotSessionEventListener::class.java)
 
     override fun onMessageReceived(event: MessageReceivedEvent) {
         if (event.author.isBot) {
@@ -82,21 +81,10 @@ class AgentPlatformChatSessionEventListener(
         }
     }
 
-    private fun chatSessionFor(discordUserSession: DiscordUserSession): AgentPlatformChatSession {
+    private fun chatSessionFor(discordUserSession: DiscordUserSession): ChatSession {
         return discordUserSession.sessionData.getOrPut("chatSession") {
-            AgentPlatformChatSession(
-                planLister = DefaultPlanLister(autonomy.agentPlatform),
-                processOptions = ProcessOptions(),
-                responseGenerator = AgentResponseGenerator(
-                    agentPlatform = autonomy.agentPlatform,
-                    agent = DefaultChatAgentBuilder(
-                        autonomy = autonomy,
-                        llm = discordConfigProperties.chatConfig.llm,
-                        persona = K9,
-                    ).build()
-                )
-            )
-        } as AgentPlatformChatSession
+            chatbot.createSession(null)
+        } as ChatSession
     }
 }
 

@@ -26,6 +26,9 @@ data class DiscordUserInfo(
     val isBot: Boolean = false,
 )
 
+/**
+ * Embabel User associated with a Discord user.
+ */
 interface DiscordUser : User {
     val discordUser: DiscordUserInfo
 }
