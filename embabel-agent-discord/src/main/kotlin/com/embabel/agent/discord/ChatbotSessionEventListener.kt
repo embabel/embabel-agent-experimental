@@ -104,14 +104,43 @@ class DiscordProcessWaitingHandler : ProcessWaitingHandler {
 class ChannelRespondingMessageListener(
     private val event: MessageReceivedEvent,
 ) : MessageListener {
+    private var progressMessage: net.dv8tion.jda.api.entities.Message? = null
 
     override fun onMessage(
         message: Message,
         conversation: Conversation,
     ) {
+        event.channel.sendTyping().queue()
         if (!conversation.messages.contains(message)) {
-            System.err.println("Message not in conversation")
+            // This is a progress message - update or create progress indicator
+            if (progressMessage == null) {
+                progressMessage = try {
+                    event.channel.sendMessage("🔄 ${message.content}").complete()
+                } catch (e: Exception) {
+                    // If we can't send the progress message, just continue
+                    null
+                }
+            } else {
+                progressMessage!!.editMessage("🔄 ${message.content}").queue(
+                    { /* success */ },
+                    {
+                        // Message no longer exists, create a new one
+                        progressMessage = try {
+                            event.channel.sendMessage("🔄 ${message.content}").complete()
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                )
+            }
+        } else {
+            // Clean up progress message and send final response
+            progressMessage?.delete()?.queue(
+                { /* success */ },
+                { /* ignore delete failures */ }
+            )
+            progressMessage = null
+            event.channel.sendMessage(message.content).queue()
         }
-        event.channel.sendMessage(message.content).queue()
     }
 }
