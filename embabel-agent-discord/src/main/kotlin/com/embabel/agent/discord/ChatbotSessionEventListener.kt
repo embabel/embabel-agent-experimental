@@ -26,7 +26,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.stereotype.Component
 
 /**
- * SessionEventListener that uses an Embabel Chatbot
+ * Discord SessionEventListener that uses an Embabel Chatbot
  */
 @Component
 @ConditionalOnBean(Chatbot::class)
@@ -105,7 +105,13 @@ class ChannelRespondingMessageListener(
     private val event: MessageReceivedEvent,
 ) : MessageListener {
 
-    override fun onMessage(message: Message) {
+    override fun onMessage(
+        message: Message,
+        conversation: Conversation,
+    ) {
+        if (!conversation.messages.contains(message)) {
+            System.err.println("Message not in conversation")
+        }
         event.channel.sendMessage(message.content).queue()
     }
 }
