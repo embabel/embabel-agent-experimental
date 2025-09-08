@@ -83,7 +83,7 @@ class ChatbotSessionEventListener(
 
     private fun chatSessionFor(discordUserSession: DiscordUserSession): ChatSession {
         return discordUserSession.sessionData.getOrPut("chatSession") {
-            chatbot.createSession(null)
+            chatbot.createSession(discordUserSession.user)
         } as ChatSession
     }
 }

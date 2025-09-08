@@ -31,6 +31,10 @@ data class DiscordUserInfo(
  */
 interface DiscordUser : User {
     val discordUser: DiscordUserInfo
+
+    val displayName: String get() = discordUser.displayName
+
+    val username: String get() = discordUser.username
 }
 
 data class DiscordUserImpl(
