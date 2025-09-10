@@ -79,7 +79,7 @@ class ChatbotSessionEventListener(
         logger.info("Responding to DM from user: ${discordUserSession.user}")
         val chatSession = chatSessionFor(discordUserSession, event)
         asyncer.async {
-            chatSession.respond(
+            chatSession.onUserMessage(
                 userMessage = UserMessage(content = event.message.contentRaw),
             )
         }
