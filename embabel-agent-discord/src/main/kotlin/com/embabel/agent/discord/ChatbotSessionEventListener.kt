@@ -17,8 +17,8 @@ package com.embabel.agent.discord
 
 import com.embabel.agent.api.common.Asyncer
 import com.embabel.agent.api.common.autonomy.ProcessWaitingException
-import com.embabel.agent.channel.AssistantMessageOutputChannelEvent
 import com.embabel.agent.channel.DiagnosticOutputChannelEvent
+import com.embabel.agent.channel.MessageOutputChannelEvent
 import com.embabel.agent.channel.OutputChannel
 import com.embabel.agent.channel.OutputChannelEvent
 import com.embabel.chat.*
@@ -171,7 +171,7 @@ class ChannelRespondingOutputChannel(
                 channel.sendMessage(event.message).queue()
             }
 
-            is AssistantMessageOutputChannelEvent -> {
+            is MessageOutputChannelEvent -> {
                 channel.sendMessage(event.message.content).queue()
             }
 
