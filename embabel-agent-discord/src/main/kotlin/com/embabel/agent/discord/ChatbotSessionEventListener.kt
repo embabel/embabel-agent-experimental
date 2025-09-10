@@ -17,8 +17,13 @@ package com.embabel.agent.discord
 
 import com.embabel.agent.api.common.Asyncer
 import com.embabel.agent.api.common.autonomy.ProcessWaitingException
+import com.embabel.agent.channel.AssistantMessageOutputChannelEvent
+import com.embabel.agent.channel.DiagnosticOutputChannelEvent
+import com.embabel.agent.channel.OutputChannel
+import com.embabel.agent.channel.OutputChannelEvent
 import com.embabel.chat.*
 import com.embabel.chat.agent.ProcessWaitingHandler
+import net.dv8tion.jda.api.entities.channel.unions.MessageChannelUnion
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent
 import net.dv8tion.jda.api.hooks.ListenerAdapter
 import org.slf4j.LoggerFactory
@@ -72,7 +77,7 @@ class ChatbotSessionEventListener(
         discordUserSession: DiscordUserSession,
     ) {
         logger.info("Responding to DM from user: ${discordUserSession.user}")
-        val chatSession = chatSessionFor(discordUserSession)
+        val chatSession = chatSessionFor(discordUserSession, event)
         asyncer.async {
             chatSession.respond(
                 userMessage = UserMessage(content = event.message.contentRaw),
@@ -81,9 +86,18 @@ class ChatbotSessionEventListener(
         }
     }
 
-    private fun chatSessionFor(discordUserSession: DiscordUserSession): ChatSession {
+    private fun chatSessionFor(
+        discordUserSession: DiscordUserSession,
+        event: MessageReceivedEvent,
+    ): ChatSession {
         return discordUserSession.sessionData.getOrPut("chatSession") {
-            chatbot.createSession(discordUserSession.user)
+            chatbot.createSession(
+                discordUserSession.user,
+                systemMessage = null,
+                outputChannel = ChannelRespondingOutputChannel(
+                    channel = event.channel,
+                )
+            )
         } as ChatSession
     }
 }
@@ -142,5 +156,30 @@ class ChannelRespondingMessageListener(
             progressMessage = null
             event.channel.sendMessage(message.content).queue()
         }
+    }
+}
+
+class ChannelRespondingOutputChannel(
+    private val channel: MessageChannelUnion,
+) : OutputChannel {
+    private var progressMessage: net.dv8tion.jda.api.entities.Message? = null
+
+    override fun send(
+        event: OutputChannelEvent,
+    ) {
+        when (event) {
+            is DiagnosticOutputChannelEvent -> {
+                channel.sendMessage(event.message).queue()
+            }
+
+            is AssistantMessageOutputChannelEvent -> {
+                channel.sendMessage(event.content).queue()
+            }
+
+            else -> {
+                // Handle other event types if necessary
+            }
+        }
+
     }
 }
