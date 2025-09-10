@@ -81,7 +81,6 @@ class ChatbotSessionEventListener(
         asyncer.async {
             chatSession.respond(
                 userMessage = UserMessage(content = event.message.contentRaw),
-                messageListener = ChannelRespondingMessageListener(event),
             )
         }
     }
@@ -117,10 +116,10 @@ class DiscordProcessWaitingHandler : ProcessWaitingHandler {
  */
 class ChannelRespondingMessageListener(
     private val event: MessageReceivedEvent,
-) : MessageListener {
+) {
     private var progressMessage: net.dv8tion.jda.api.entities.Message? = null
 
-    override fun onMessage(
+    fun onMessage(
         message: Message,
         conversation: Conversation,
     ) {
@@ -173,7 +172,7 @@ class ChannelRespondingOutputChannel(
             }
 
             is AssistantMessageOutputChannelEvent -> {
-                channel.sendMessage(event.content).queue()
+                channel.sendMessage(event.message.content).queue()
             }
 
             else -> {
