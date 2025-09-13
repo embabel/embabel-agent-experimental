@@ -17,13 +17,8 @@ package com.embabel.agent.discord
 
 import com.embabel.agent.api.common.Asyncer
 import com.embabel.agent.api.common.autonomy.ProcessWaitingException
-import com.embabel.agent.channel.LoggingOutputChannelEvent
-import com.embabel.agent.channel.MessageOutputChannelEvent
-import com.embabel.agent.channel.OutputChannel
-import com.embabel.agent.channel.OutputChannelEvent
 import com.embabel.chat.*
 import com.embabel.chat.agent.ProcessWaitingHandler
-import net.dv8tion.jda.api.entities.channel.unions.MessageChannelUnion
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent
 import net.dv8tion.jda.api.hooks.ListenerAdapter
 import org.slf4j.LoggerFactory
@@ -128,18 +123,31 @@ class ChannelRespondingMessageListener(
             // This is a progress message - update or create progress indicator
             if (progressMessage == null) {
                 progressMessage = try {
-                    event.channel.sendMessage("🔄 ${message.content}").complete()
+                    val progressContent = "🔄 ${message.content}"
+                    if (progressContent.length > 2000) {
+                        event.channel.sendMessage("🔄 [Message too long for progress display]").complete()
+                    } else {
+                        event.channel.sendMessage(progressContent).complete()
+                    }
                 } catch (e: Exception) {
                     // If we can't send the progress message, just continue
                     null
                 }
             } else {
-                progressMessage!!.editMessage("🔄 ${message.content}").queue(
+                val progressContent = "🔄 ${message.content}"
+                val editContent =
+                    if (progressContent.length > 2000) "🔄 [Message too long for progress display]" else progressContent
+                progressMessage!!.editMessage(editContent).queue(
                     { /* success */ },
                     {
                         // Message no longer exists, create a new one
                         progressMessage = try {
-                            event.channel.sendMessage("🔄 ${message.content}").complete()
+                            val progressContent = "🔄 ${message.content}"
+                            if (progressContent.length > 2000) {
+                                event.channel.sendMessage("🔄 [Message too long for progress display]").complete()
+                            } else {
+                                event.channel.sendMessage(progressContent).complete()
+                            }
                         } catch (e: Exception) {
                             null
                         }
@@ -153,32 +161,7 @@ class ChannelRespondingMessageListener(
                 { /* ignore delete failures */ }
             )
             progressMessage = null
-            event.channel.sendMessage(message.content).queue()
+            DiscordMessageUtils.sendLongMessage(event.channel, message.content)
         }
-    }
-}
-
-class ChannelRespondingOutputChannel(
-    private val channel: MessageChannelUnion,
-) : OutputChannel {
-    private var progressMessage: net.dv8tion.jda.api.entities.Message? = null
-
-    override fun send(
-        event: OutputChannelEvent,
-    ) {
-        when (event) {
-            is LoggingOutputChannelEvent -> {
-                channel.sendMessage(event.message).queue()
-            }
-
-            is MessageOutputChannelEvent -> {
-                channel.sendMessage(event.message.content).queue()
-            }
-
-            else -> {
-                // Handle other event types if necessary
-            }
-        }
-
     }
 }
