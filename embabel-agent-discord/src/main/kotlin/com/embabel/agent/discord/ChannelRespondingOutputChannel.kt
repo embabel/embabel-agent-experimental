@@ -15,10 +15,7 @@
  */
 package com.embabel.agent.discord
 
-import com.embabel.agent.channel.LoggingOutputChannelEvent
-import com.embabel.agent.channel.MessageOutputChannelEvent
-import com.embabel.agent.channel.OutputChannel
-import com.embabel.agent.channel.OutputChannelEvent
+import com.embabel.agent.channel.*
 import net.dv8tion.jda.api.entities.Message
 import net.dv8tion.jda.api.entities.channel.unions.MessageChannelUnion
 
@@ -39,10 +36,37 @@ class ChannelRespondingOutputChannel(
                 DiscordMessageUtils.sendLongMessage(channel, event.message.content)
             }
 
+            is ProgressOutputChannelEvent -> {
+                handleProgressMessage(event.message)
+            }
+
             else -> {
                 // Handle other event types if necessary
             }
         }
 
+    }
+
+    private fun handleProgressMessage(message: String) {
+        if (message.isBlank()) {
+            // Empty progress message means operation is complete - delete the progress message
+            progressMessage?.let { msg ->
+                msg.delete().queue(
+                    { progressMessage = null },
+                    { /* ignore delete failures */ }
+                )
+            }
+        } else {
+            // Update or create progress message
+            if (progressMessage == null) {
+                // Create new progress message
+                channel.sendMessage("⏳ $message").queue { sentMessage ->
+                    progressMessage = sentMessage
+                }
+            } else {
+                // Update existing progress message
+                progressMessage?.editMessage("⏳ $message")?.queue()
+            }
+        }
     }
 }
