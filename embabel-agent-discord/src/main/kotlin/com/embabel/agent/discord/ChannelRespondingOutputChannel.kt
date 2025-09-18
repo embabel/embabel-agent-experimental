@@ -33,6 +33,7 @@ class ChannelRespondingOutputChannel(
             }
 
             is MessageOutputChannelEvent -> {
+                clearProgressMessage()
                 DiscordMessageUtils.sendLongMessage(channel, event.message.content)
             }
 
@@ -49,13 +50,7 @@ class ChannelRespondingOutputChannel(
 
     private fun handleProgressMessage(message: String) {
         if (message.isBlank()) {
-            // Empty progress message means operation is complete - delete the progress message
-            progressMessage?.let { msg ->
-                msg.delete().queue(
-                    { progressMessage = null },
-                    { /* ignore delete failures */ }
-                )
-            }
+            clearProgressMessage()
         } else {
             // Update or create progress message
             if (progressMessage == null) {
@@ -67,6 +62,15 @@ class ChannelRespondingOutputChannel(
                 // Update existing progress message
                 progressMessage?.editMessage("⏳ $message")?.queue()
             }
+        }
+    }
+
+    private fun clearProgressMessage() {
+        progressMessage?.let { msg ->
+            msg.delete().queue(
+                { progressMessage = null },
+                { /* ignore delete failures */ }
+            )
         }
     }
 }
