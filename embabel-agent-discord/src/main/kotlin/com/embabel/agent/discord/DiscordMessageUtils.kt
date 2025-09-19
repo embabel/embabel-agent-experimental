@@ -15,16 +15,18 @@
  */
 package com.embabel.agent.discord
 
+import com.embabel.common.util.loggerFor
 import net.dv8tion.jda.api.entities.channel.unions.MessageChannelUnion
 
 object DiscordMessageUtils {
-    private const val DISCORD_MESSAGE_LIMIT = 2000
+    // It's really 2000 but we don't want breakage
+    private const val DISCORD_MESSAGE_LIMIT = 1900
     private const val CODE_BLOCK_MARKER = "```"
     private const val CODE_BLOCK_OVERHEAD = 8 // Space for opening/closing ``` + language
 
     data class CodeBlockState(
         val inCodeBlock: Boolean = false,
-        val language: String = ""
+        val language: String = "",
     )
 
     fun splitMessage(content: String): List<String> {
@@ -134,7 +136,10 @@ object DiscordMessageUtils {
         return messages
     }
 
-    private fun updateCodeBlockState(currentState: CodeBlockState, line: String): CodeBlockState {
+    private fun updateCodeBlockState(
+        currentState: CodeBlockState,
+        line: String,
+    ): CodeBlockState {
         val trimmedLine = line.trim()
 
         if (trimmedLine.startsWith(CODE_BLOCK_MARKER)) {
@@ -155,9 +160,14 @@ object DiscordMessageUtils {
         channel: MessageChannelUnion,
         content: String,
     ) {
-        val messageParts = splitMessage(content)
-        messageParts.forEach { part ->
-            channel.sendMessage(part).queue()
+        try {
+            val messageParts = splitMessage(content)
+            messageParts.forEach { part ->
+                channel.sendMessage(part).queue()
+            }
+        } catch (e: Exception) {
+            loggerFor<DiscordMessageUtils>().warn("Failed to send message to Discord channel: {}", e.message)
+            channel.sendMessage("Sorry, something went wrong, please try again").queue()
         }
     }
 }

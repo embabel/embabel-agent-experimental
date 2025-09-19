@@ -19,6 +19,9 @@ import com.embabel.agent.channel.*
 import net.dv8tion.jda.api.entities.Message
 import net.dv8tion.jda.api.entities.channel.unions.MessageChannelUnion
 
+/**
+ * OutputChannel that responds in a Discord channel, updating a progress message as needed.
+ */
 class ChannelRespondingOutputChannel(
     private val channel: MessageChannelUnion,
 ) : OutputChannel {
