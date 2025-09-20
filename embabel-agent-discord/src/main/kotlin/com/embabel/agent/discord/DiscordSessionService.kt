@@ -61,14 +61,7 @@ class DiscordSessionService {
         return DiscordUserSession(
             DiscordUserImpl(
                 id = user.id,
-                discordUser = DiscordUserInfo(
-                    id = user.id,
-                    avatarUrl = user.effectiveAvatarUrl,
-                    isBot = user.isBot,
-                    username = user.name,
-                    discriminator = user.discriminator,
-                    displayName = if (isDirectMessage) user.name else user.effectiveName,
-                )
+                discordUser = DiscordUserInfo(user, isDirectMessage),
             ),
             isDirectMessage = isDirectMessage,
             channelId = channel.id,
