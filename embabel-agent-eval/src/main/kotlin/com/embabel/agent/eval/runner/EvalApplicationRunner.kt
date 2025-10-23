@@ -15,7 +15,7 @@
  */
 package com.embabel.agent.eval.runner
 
-import com.embabel.agent.config.models.OpenAiModels
+import com.embabel.agent.api.models.OpenAiModels
 import com.embabel.agent.eval.assert.AssertionEvaluator
 import com.embabel.agent.eval.client.AgentChatClient
 import com.embabel.agent.eval.support.DefaultEvaluationResultScorer

@@ -15,7 +15,7 @@
  */
 package com.embabel.agent.eval.runner
 
-import com.embabel.agent.config.models.OpenAiModels
+import com.embabel.agent.api.models.OpenAiModels
 import com.embabel.agent.eval.assert.AssertionEvaluator
 import com.embabel.agent.eval.client.*
 import com.embabel.agent.eval.support.*
@@ -68,7 +68,7 @@ class DefaultEvaluationRunner(
     private fun evaluateConversation(
         evaluationJob: EvaluationJob,
         options: EvaluationOptions,
-        supplyFacts: Boolean
+        supplyFacts: Boolean,
     ): EvaluationResult {
 
         val session = agentChatClient.createSession(evaluationJob.target)
@@ -83,7 +83,7 @@ class DefaultEvaluationRunner(
                 override fun <T : Any?, E : Throwable?> onError(
                     context: RetryContext?,
                     callback: RetryCallback<T?, E?>?,
-                    throwable: Throwable?
+                    throwable: Throwable?,
                 ) {
                     evaluationInProgress.recordFailure()
                 }
