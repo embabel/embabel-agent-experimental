@@ -1,15 +1,19 @@
 # Remote Action Support
 
-**Experimental** support for remote actions.
+Experimental support for remote actions, hosted on external servers.
 
 This enables external servers to register actions that are eligible
 for participation in planning and execution.
 
 The contract is simple and easy to implement on any HTTP stack.
 
-## Server Contract
+Remote servers must call the Embabel agent server to register themselves,
+and expose a REST API to provide action and type metadata and
+execute actions.
 
-Client servers must expose a REST API under `{baseUrl}/api/v1/` with the following endpoints:
+## Remote Server Endpoints
+
+Remote servers must expose a REST API under `{baseUrl}/api/v1/` with the following endpoints:
 
 ### GET /api/v1/actions
 
@@ -105,7 +109,35 @@ Executes an action with the given parameters.
 
 ## Registration
 
-To register a remote server, create a `RestServerRegistration`:
+Remote servers must register via the Embabel server's REST API.
+
+### POST /api/v1/remote/register server endpoint
+
+Remote servers must invoke this endpoint to register with the Embabel server.
+
+**Request body:**
+
+```json
+{
+  "baseUrl": "http://localhost:8000",
+  "name": "my-server",
+  "description": "My remote action server"
+}
+```
+
+**Response:** 200 OK on successful registration
+
+This endpoint:
+
+1. Creates a `RestServer` instance with the provided registration
+2. Causes the Embabel server to invoke the the remote server to fetch actions and types
+3. Deploys the remote actions into the agent platform
+
+## Programmatic Registration
+
+To register a remote server programmatically within an Embabel application (for example, to dynamically register a
+server based on application logic),
+create a `RestServerRegistration` object:
 
 ```kotlin
 val registration = RestServerRegistration(
@@ -113,6 +145,40 @@ val registration = RestServerRegistration(
     name = "my-server",
     description = "My remote action server"
 )
+val restServer = RestServer(registration, restClient, objectMapper)
+val agentScope = restServer.agentScope(agentPlatform)
+agentPlatform.deploy(agentScope)
+```
+
+## GET /api/v1/remote server informational endpoint
+
+Server informational endpoint to list all remote actions currently registered on the Embabel agent server.
+
+**Response:** Array of `RestActionMetadata` objects for all registered remote actions
+
+```json
+[
+  {
+    "name": "remote_action_name",
+    "description": "Remote action description",
+    "inputs": [
+      ...
+    ],
+    "outputs": [
+      ...
+    ],
+    "pre": [
+      ...
+    ],
+    "post": [
+      ...
+    ],
+    "cost": 0.5,
+    "value": 0.8,
+    "can_rerun": true
+  }
+]
 ```
 
 See `RestServerIT.kt` for integration test examples.
+
