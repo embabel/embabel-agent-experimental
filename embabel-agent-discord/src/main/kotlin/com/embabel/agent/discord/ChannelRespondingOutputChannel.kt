@@ -15,7 +15,7 @@
  */
 package com.embabel.agent.discord
 
-import com.embabel.agent.channel.*
+import com.embabel.agent.api.channel.*
 import net.dv8tion.jda.api.entities.Message
 import net.dv8tion.jda.api.entities.channel.unions.MessageChannelUnion
 

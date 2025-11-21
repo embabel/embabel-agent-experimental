@@ -17,7 +17,7 @@ package com.embabel.agent.remote.action
 
 import com.embabel.agent.core.Action
 import com.embabel.agent.core.ProcessContext
-import com.embabel.agent.testing.integration.IntegrationTestUtils.dummyAgentPlatform
+import com.embabel.agent.test.integration.IntegrationTestUtils.dummyAgentPlatform
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.mockk.every
 import io.mockk.mockk

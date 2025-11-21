@@ -15,7 +15,7 @@
  */
 package com.embabel.agent.discord
 
-import com.embabel.agent.identity.User
+import com.embabel.agent.api.identity.User
 
 /**
  * Our own representation of a Discord user.
