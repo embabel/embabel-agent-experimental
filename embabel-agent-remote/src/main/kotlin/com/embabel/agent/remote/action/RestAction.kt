@@ -52,7 +52,7 @@ internal class RestAction(
         processContext: ProcessContext,
     ): ActionStatus = ActionRunner.execute(processContext) {
         val inputValues: Map<String, Any> = inputs.associate { input ->
-            val value = processContext.getValue(variable = input.name, type = input.type)
+            val value = processContext.agentProcess.getValue(variable = input.name, type = input.type)
                 ?: throw IllegalArgumentException("Input ${input.name} of type ${input.type} not found in process context")
             input.name to value
         }

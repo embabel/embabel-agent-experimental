@@ -68,7 +68,7 @@ class RestServerIT {
         assertTrue(agentScope.actions.isNotEmpty(), "Should have had agents")
         val greet: Action = agentScope.actions.first { it.name == "greet" }
         val pc = mockk<ProcessContext>(relaxed = true)
-        every { pc.getValue("input", "GreetingInput") } returns mapOf(
+        every { pc.agentProcess.getValue("input", "GreetingInput") } returns mapOf(
             "name" to "Bob", "language" to "en"
         )
 
