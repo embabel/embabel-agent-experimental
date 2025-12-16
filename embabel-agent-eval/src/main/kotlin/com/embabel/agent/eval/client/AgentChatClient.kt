@@ -36,6 +36,7 @@ data class SessionCreationResponse(
     val sessionId: String,
 )
 
+
 /**
  * Simple client to Agent chat
  */
@@ -48,6 +49,10 @@ class AgentChatClient(
     private val boogieContextPath: String = "/api/v1/graphs",
     private val apiKey: String = "treehorn",
 ) {
+
+    companion object {
+        private const val MESSAGE_NO_RESPONSE_BODY = "No response body"
+    }
 
     // TODO share with the BoogieClient
     val defaultHeaders = HttpHeaders().apply {
@@ -63,7 +68,7 @@ class AgentChatClient(
             .body(knowledgeContext)
             .retrieve()
             .body<String>()
-            ?: throw IllegalStateException("No response body")
+            ?: throw IllegalStateException(MESSAGE_NO_RESPONSE_BODY)
     }
 
     fun createSession(sessionCreationRequest: SessionCreationRequest): SessionCreationResponse {
@@ -74,7 +79,7 @@ class AgentChatClient(
             .body(sessionCreationRequest)
             .retrieve()
             .body<SessionCreationResponse>()
-            ?: throw IllegalStateException("No response body")
+            ?: throw IllegalStateException(MESSAGE_NO_RESPONSE_BODY)
     }
 
 //    fun ingestDocument(knowledgeContext: KnowledgeContext): String {
@@ -84,7 +89,7 @@ class AgentChatClient(
 //            HttpMethod.PUT,
 //            entity,
 //            String::class.java,
-//        ).body ?: throw IllegalStateException("No response body")
+//        ).body ?: throw IllegalStateException(noResponseMessage)
 //    }
 
     fun getObjectContext(id: String): ObjectContext {
@@ -93,7 +98,7 @@ class AgentChatClient(
             .uri("${agentHost}/${agentChatPath}/objectContexts/{id}", id)
             .retrieve()
             .body<ObjectContext>()
-            ?: throw IllegalStateException("No response body")
+            ?: throw IllegalStateException(MESSAGE_NO_RESPONSE_BODY)
     }
 
     fun respond(chatRequest: ChatRequest): MessageResponse {
@@ -103,7 +108,7 @@ class AgentChatClient(
             .body(chatRequest)
             .retrieve()
             .body<MessageResponse>()
-            ?: throw IllegalStateException("No response body")
+            ?: throw IllegalStateException(MESSAGE_NO_RESPONSE_BODY)
     }
 
 }
