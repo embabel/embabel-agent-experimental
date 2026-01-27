@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.embabel.agent</groupId>
+        <artifactId>embabel-agent-parent</artifactId>
+        <version>0.3.3-SNAPSHOT</version>
+    </parent>
+    <groupId>com.embabel.agent</groupId>
+    <artifactId>embabel-agent-experimental</artifactId>
+    <packaging>pom</packaging>
+    <name>Embabel Example Agent Experimental</name>
+    <description>Example Agentic Experimental Moduels Incubation</description>
+
+    <modules>
+        <module>embabel-agent-discord</module>
+        <module>embabel-agent-eval</module>
+        <module>embabel-agent-remote</module>
+        <module>embabel-agent-skills</module>
+        <module>embabel-agent-spec</module>
+    </modules>
+
+    <repositories>
+        <repository>
+            <id>embabel-releases</id>
+            <url>https://repo.embabel.com/artifactory/libs-release</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>embabel-snapshots</id>
+            <url>https://repo.embabel.com/artifactory/libs-snapshot</url>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
+</project>
