@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
     <name>Embabel Agent Discord UX</name>
     <description>Embabel Agent Discord Components</description>
-    <url>https://github.com/embabel/embabel-agent-experimental/url>
+    <url>https://github.com/embabel/embabel-agent-experimental</url>
 
     <scm>
         <url>https://github.com/embabel/embabel-agent-experimental</url>
