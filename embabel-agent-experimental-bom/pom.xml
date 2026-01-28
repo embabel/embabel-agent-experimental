@@ -13,7 +13,7 @@
     <packaging>pom</packaging>
     <name>Embabel Agent Experimental BOM</name>
     <description>Embabel Agent Experimental BOM</description>
-    <url>https://github.com/embabel/embabel-agent</url>
+    <url>https://github.com/embabel/embabel-agent-experimental</url>
 
     <scm>
         <url>https://github.com/embabel/embabel-agent-experimental</url>
