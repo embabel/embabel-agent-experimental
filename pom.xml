@@ -14,6 +14,7 @@
     <description>Example Agentic Experimental Moduels Incubation</description>
 
     <modules>
+        <module>embabel-agent-experimental-bom</module>
         <module>embabel-agent-discord</module>
         <module>embabel-agent-eval</module>
         <module>embabel-agent-remote</module>
