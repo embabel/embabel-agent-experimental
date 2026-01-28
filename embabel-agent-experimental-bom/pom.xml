@@ -9,7 +9,7 @@
     </parent>
     <groupId>com.embabel.agent</groupId>
     <artifactId>embabel-agent-experimental-bom</artifactId>
-    <version>0.3.3-SNAPSHOT</version>
+    <version>0.3.4-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>Embabel Agent Experimental BOM</name>
     <description>Embabel Agent Experimental BOM</description>
