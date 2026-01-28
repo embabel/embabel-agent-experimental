@@ -35,7 +35,7 @@
 
 The **Embabel Agent Experimental** repository contains modules that are under active development and evaluation. These modules have been relocated from the main [embabel-agent](https://github.com/embabel/embabel-agent) repository as they represent innovative features and capabilities that are still maturing.
 
-Think of this repository as an **incubation lab** for new agent capabilities - similar to how Spring's experimental features are tested before becoming part of the core framework. Modules here are fully functional but may undergo API changes, refinements, or architectural improvements based on community feedback and production experience.
+This repository as an **incubation lab** for new agent capabilities. Modules here are fully functional but may undergo API changes, refinements, or architectural improvements based on community feedback and production experience.
 
 ### Purpose
 
@@ -53,7 +53,6 @@ Experimental modules undergo a rigorous evaluation process before being promoted
 2. **Community Feedback**: Users provide feedback on API design, functionality, and use cases
 3. **Stability Assessment**: The module demonstrates API stability, comprehensive testing, and production readiness
 4. **Promotion Decision**: Based on maturity metrics and strategic alignment, the module is promoted to the main [embabel-agent](https://github.com/embabel/embabel-agent) repository
-5. **Deprecation Path**: The experimental version is deprecated with clear migration guidance
 
 ## Experimental Modules
 
@@ -184,45 +183,6 @@ repositories {
     }
 }
 ```
-
-## Spring Boot Integration Example
-
-Here's a complete example of using experimental modules in a Spring Boot application with Kotlin:
-
-```kotlin
-import com.embabel.agent.eval.AgentEvaluator
-import com.embabel.agent.remote.RemoteAgentExecutor
-import org.springframework.boot.autoconfigure.SpringBootApplication
-import org.springframework.boot.runApplication
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
-
-@SpringBootApplication
-class MyAgentApplication
-
-fun main(args: Array<String>) {
-    runApplication<MyAgentApplication>(*args)
-}
-
-@Configuration
-class ExperimentalAgentConfiguration {
-    
-    @Bean
-    fun agentEvaluator(): AgentEvaluator {
-        return AgentEvaluator.builder()
-            .withMetricsEnabled(true)
-            .build()
-    }
-    
-    @Bean
-    fun remoteAgentExecutor(): RemoteAgentExecutor {
-        return RemoteAgentExecutor.builder()
-            .withConcurrency(10)
-            .build()
-    }
-}
-```
-
 ## Important Considerations
 
 ### API Stability
