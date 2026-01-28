@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
     <name>Embabel Agent Eval</name>
     <description>Assess of how Agent is doing on various tasks</description>
-    <url>https://github.com/embabel/embabel-agent</url>
+    <url>https://github.com/embabel/embabel-agent-experimental</url>
 
     <scm>
         <url>https://github.com/embabel/embabel-agent-experimental/url>
