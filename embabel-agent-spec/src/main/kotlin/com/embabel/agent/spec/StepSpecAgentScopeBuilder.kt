@@ -16,6 +16,7 @@
 package com.embabel.agent.spec
 
 import com.embabel.agent.api.common.scope.AgentScopeBuilder
+import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.core.*
 import com.embabel.agent.spec.model.StepSpecContext
 import com.embabel.agent.spec.persistence.StepSpecRepository
@@ -32,7 +33,8 @@ class StepSpecAgentScopeBuilder(
     private val agentPlatform: AgentPlatform,
     private val repository: StepSpecRepository = YmlStepSpecRepository(System.getProperty("user.dir") + "/steps"),
     private val dataDictionary: DataDictionary = agentPlatform,
-    private val toolGroups: List<ToolGroupDescription> = agentPlatform.toolGroupResolver.availableToolGroups()
+    private val toolGroups: List<ToolGroupDescription> = agentPlatform.toolGroupResolver.availableToolGroups(),
+    private val tools: List<Tool> = emptyList(),
 ) : AgentScopeBuilder {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -45,6 +47,7 @@ class StepSpecAgentScopeBuilder(
             name = name,
             dataDictionary = dataDictionary,
             toolGroups = toolGroups,
+            tools = tools,
         )
 
         val actions = mutableListOf<Action>()

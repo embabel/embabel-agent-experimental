@@ -37,6 +37,7 @@ class StepSpecEmitTest {
             name = "test-context",
             dataDictionary = dataDictionary,
             toolGroups = emptyList(),
+            tools = emptyList(),
         )
     }
 
@@ -235,6 +236,7 @@ class StepSpecEmitTest {
                 name = "with-tools",
                 dataDictionary = dataDictionary,
                 toolGroups = toolGroups,
+                tools = emptyList(),
             )
 
             assertEquals(2, context.toolGroups.size)
@@ -246,6 +248,7 @@ class StepSpecEmitTest {
                 name = "with-dict",
                 dataDictionary = dataDictionary,
                 toolGroups = emptyList(),
+                tools = emptyList(),
             )
 
             assertSame(dataDictionary, context.dataDictionary)
