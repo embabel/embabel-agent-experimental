@@ -18,6 +18,7 @@ package com.embabel.agent.skills.script
 import com.embabel.agent.api.tool.Tool
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
+import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -50,22 +51,24 @@ class ScriptToolTest {
     }
 
     @Test
-    fun `definition has args and stdin parameters`() {
+    fun `definition has args, stdin, and inputFiles parameters`() {
         val tool = ScriptTool(testScript, TestEngine())
         val params = tool.definition.inputSchema.parameters
 
-        assertEquals(2, params.size)
+        assertEquals(3, params.size)
         assertEquals("args", params[0].name)
         assertEquals(Tool.ParameterType.ARRAY, params[0].type)
         assertEquals("stdin", params[1].name)
         assertEquals(Tool.ParameterType.STRING, params[1].type)
+        assertEquals("inputFiles", params[2].name)
+        assertEquals(Tool.ParameterType.ARRAY, params[2].type)
     }
 
     @Test
     fun `call returns error when engine denies execution`() {
         val engine = object : SkillScriptExecutionEngine {
             override fun supportedLanguages() = emptySet<ScriptLanguage>()
-            override fun execute(script: SkillScript, args: List<String>, stdin: String?) =
+            override fun execute(script: SkillScript, args: List<String>, stdin: String?, inputFiles: List<Path>) =
                 ScriptExecutionResult.Denied("Not supported")
             override fun validate(script: SkillScript) =
                 ScriptExecutionResult.Denied("Validation failed")
@@ -102,7 +105,7 @@ class ScriptToolTest {
     fun `call parses arguments from JSON input`() {
         var capturedArgs: List<String> = emptyList()
         val engine = object : TestEngine() {
-            override fun execute(script: SkillScript, args: List<String>, stdin: String?): ScriptExecutionResult {
+            override fun execute(script: SkillScript, args: List<String>, stdin: String?, inputFiles: List<Path>): ScriptExecutionResult {
                 capturedArgs = args
                 return ScriptExecutionResult.Success("", "", 0, 1.milliseconds)
             }
@@ -118,7 +121,7 @@ class ScriptToolTest {
     fun `call parses stdin from JSON input`() {
         var capturedStdin: String? = null
         val engine = object : TestEngine() {
-            override fun execute(script: SkillScript, args: List<String>, stdin: String?): ScriptExecutionResult {
+            override fun execute(script: SkillScript, args: List<String>, stdin: String?, inputFiles: List<Path>): ScriptExecutionResult {
                 capturedStdin = stdin
                 return ScriptExecutionResult.Success("", "", 0, 1.milliseconds)
             }
@@ -195,6 +198,6 @@ class ScriptToolTest {
         )
     ) : SkillScriptExecutionEngine {
         override fun supportedLanguages() = ScriptLanguage.entries.toSet()
-        override fun execute(script: SkillScript, args: List<String>, stdin: String?) = result
+        override fun execute(script: SkillScript, args: List<String>, stdin: String?, inputFiles: List<Path>) = result
     }
 }

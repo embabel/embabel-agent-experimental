@@ -67,7 +67,7 @@ class LoadedSkillScriptToolsTest {
         // Engine only supports Bash
         val bashOnlyEngine = object : SkillScriptExecutionEngine {
             override fun supportedLanguages() = setOf(ScriptLanguage.BASH)
-            override fun execute(script: SkillScript, args: List<String>, stdin: String?) =
+            override fun execute(script: SkillScript, args: List<String>, stdin: String?, inputFiles: List<Path>) =
                 ScriptExecutionResult.Success("", "", 0, 1.milliseconds)
         }
 
@@ -164,7 +164,7 @@ class LoadedSkillScriptToolsTest {
 
     private class AllLanguagesEngine : SkillScriptExecutionEngine {
         override fun supportedLanguages() = ScriptLanguage.entries.toSet()
-        override fun execute(script: SkillScript, args: List<String>, stdin: String?) =
+        override fun execute(script: SkillScript, args: List<String>, stdin: String?, inputFiles: List<Path>) =
             ScriptExecutionResult.Success("ok", "", 0, 1.milliseconds)
     }
 }

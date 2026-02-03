@@ -18,6 +18,8 @@ package com.embabel.agent.skills.script
 import com.embabel.agent.api.tool.Tool
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import java.nio.file.Path
+import java.nio.file.Paths
 
 /**
  * A Tool that executes a skill script.
@@ -54,6 +56,13 @@ class ScriptTool(
                 description = "Input to provide via standard input",
                 required = false,
             ),
+            Tool.Parameter(
+                name = "inputFiles",
+                type = Tool.ParameterType.ARRAY,
+                description = "Paths to files to make available to the script in INPUT_DIR",
+                required = false,
+                itemType = Tool.ParameterType.STRING,
+            ),
         ),
     )
 
@@ -66,8 +75,11 @@ class ScriptTool(
         // Parse input
         val params = parseInput(input)
 
+        // Convert input file paths to Path objects
+        val inputFilePaths = params.inputFiles.map { Paths.get(it) }
+
         // Execute
-        val result = engine.execute(script, params.args, params.stdin)
+        val result = engine.execute(script, params.args, params.stdin, inputFilePaths)
 
         return formatResult(result)
     }
@@ -155,5 +167,6 @@ class ScriptTool(
     private data class ScriptInput(
         val args: List<String> = emptyList(),
         val stdin: String? = null,
+        val inputFiles: List<String> = emptyList(),
     )
 }

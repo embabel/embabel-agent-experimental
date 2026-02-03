@@ -110,25 +110,48 @@ class ProcessExecutionEngine(
         script: SkillScript,
         args: List<String>,
         stdin: String?,
+        inputFiles: List<Path>,
     ): ScriptExecutionResult {
         // Validate first
         validate(script)?.let { return it }
 
+        // Validate input files exist
+        for (inputFile in inputFiles) {
+            if (!Files.exists(inputFile)) {
+                return ScriptExecutionResult.Denied("Input file does not exist: $inputFile")
+            }
+            if (!Files.isRegularFile(inputFile)) {
+                return ScriptExecutionResult.Denied("Input path is not a file: $inputFile")
+            }
+        }
+
         val interpreter = interpreters[script.language]!!
         val command = interpreter + listOf(script.scriptPath.toAbsolutePath().toString()) + args
+
+        // Create input directory and copy input files
+        val inputDir = Files.createTempDirectory("script-input-")
+        logger.debug("Created input directory: {}", inputDir)
 
         // Create output directory for artifacts
         val outputDir = Files.createTempDirectory("script-output-")
         logger.debug("Created output directory: {}", outputDir)
 
-        logger.debug("Executing script: {} with args: {}", script.fileName, args)
-
         return try {
+            // Copy input files to input directory
+            for (inputFile in inputFiles) {
+                val targetPath = inputDir.resolve(inputFile.fileName)
+                Files.copy(inputFile, targetPath)
+                logger.debug("Copied input file {} to {}", inputFile, targetPath)
+            }
+
+            logger.debug("Executing script: {} with args: {}, {} input files", script.fileName, args, inputFiles.size)
+
             val (result, duration) = measureTimedValue {
                 executeProcess(
                     command = command,
                     workingDir = script.basePath.toFile(),
                     stdin = stdin,
+                    inputDir = inputDir,
                     outputDir = outputDir,
                 )
             }
@@ -143,6 +166,8 @@ class ProcessExecutionEngine(
                         duration,
                         artifacts.size
                     )
+                    // Clean up input directory (no longer needed)
+                    cleanupDirectory(inputDir)
                     ScriptExecutionResult.Success(
                         stdout = result.stdout,
                         stderr = result.stderr,
@@ -154,7 +179,8 @@ class ProcessExecutionEngine(
 
                 is ProcessResult.TimedOut -> {
                     logger.warn("Script {} timed out after {}", script.fileName, timeout)
-                    cleanupOutputDir(outputDir)
+                    cleanupDirectory(inputDir)
+                    cleanupDirectory(outputDir)
                     ScriptExecutionResult.Failure(
                         error = "Script execution timed out after $timeout",
                         stderr = result.stderr,
@@ -165,7 +191,8 @@ class ProcessExecutionEngine(
 
                 is ProcessResult.Failed -> {
                     logger.error("Script {} failed to start: {}", script.fileName, result.error)
-                    cleanupOutputDir(outputDir)
+                    cleanupDirectory(inputDir)
+                    cleanupDirectory(outputDir)
                     ScriptExecutionResult.Failure(
                         error = result.error,
                         duration = duration,
@@ -174,7 +201,8 @@ class ProcessExecutionEngine(
             }
         } catch (e: Exception) {
             logger.error("Unexpected error executing script {}: {}", script.fileName, e.message, e)
-            cleanupOutputDir(outputDir)
+            cleanupDirectory(inputDir)
+            cleanupDirectory(outputDir)
             ScriptExecutionResult.Failure(
                 error = "Unexpected error: ${e.message}",
             )
@@ -204,15 +232,15 @@ class ProcessExecutionEngine(
     }
 
     /**
-     * Clean up output directory on failure.
+     * Clean up a temporary directory.
      */
-    private fun cleanupOutputDir(outputDir: Path) {
+    private fun cleanupDirectory(dir: Path) {
         try {
-            Files.walk(outputDir)
+            Files.walk(dir)
                 .sorted(Comparator.reverseOrder())
                 .forEach { Files.deleteIfExists(it) }
         } catch (e: Exception) {
-            logger.warn("Failed to clean up output directory {}: {}", outputDir, e.message)
+            logger.warn("Failed to clean up directory {}: {}", dir, e.message)
         }
     }
 
@@ -220,6 +248,7 @@ class ProcessExecutionEngine(
         command: List<String>,
         workingDir: File,
         stdin: String?,
+        inputDir: Path,
         outputDir: Path,
     ): ProcessResult {
         return try {
@@ -233,6 +262,9 @@ class ProcessExecutionEngine(
                 env.clear()
             }
             env.putAll(environment)
+
+            // Add INPUT_DIR for scripts to read input files
+            env["INPUT_DIR"] = inputDir.toAbsolutePath().toString()
 
             // Add OUTPUT_DIR for scripts to write artifacts
             env["OUTPUT_DIR"] = outputDir.toAbsolutePath().toString()

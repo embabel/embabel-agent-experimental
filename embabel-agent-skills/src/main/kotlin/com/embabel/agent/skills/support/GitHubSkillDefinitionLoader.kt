@@ -15,14 +15,18 @@
  */
 package com.embabel.agent.skills.support
 
+import com.embabel.coding.tools.git.ClonedRepositoryReference
 import com.embabel.coding.tools.git.RepositoryReferenceProvider
+import java.io.Closeable
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * Loads skills from GitHub repositories.
  *
  * Clones a GitHub repository and loads all skills from it.
- * The repository is cleaned up after loading unless configured otherwise.
+ * The repository is kept open while the loader is active, allowing scripts and
+ * other resources to be accessed. Call [close] to clean up cloned repositories.
  *
  * @param directorySkillDefinitionLoader the loader to use for parsing skills from directories
  * @param repositoryReferenceProvider the provider for cloning Git repositories
@@ -32,7 +36,13 @@ import java.nio.file.Path
 class GitHubSkillDefinitionLoader(
     private val directorySkillDefinitionLoader: DirectorySkillDefinitionLoader = DefaultDirectorySkillDefinitionLoader(),
     private val repositoryReferenceProvider: RepositoryReferenceProvider = RepositoryReferenceProvider.create(),
-) {
+) : Closeable {
+
+    /**
+     * Tracks cloned repositories so they aren't deleted while the loader is active.
+     * These will be cleaned up when [close] is called.
+     */
+    private val clonedRepositories = ConcurrentLinkedQueue<ClonedRepositoryReference>()
 
     /**
      * Load all skills from a GitHub repository.
@@ -65,15 +75,16 @@ class GitHubSkillDefinitionLoader(
             throw SkillLoadException("Failed to clone GitHub repository: $owner/$repo", e)
         }
 
-        return clonedRepo.use { repo ->
-            val skillsDirectory = if (skillsPath != null) {
-                repo.localPath.resolve(skillsPath)
-            } else {
-                repo.localPath
-            }
+        // Keep reference to prevent deletion - will be cleaned up on close()
+        clonedRepositories.add(clonedRepo)
 
-            loadSkillsFromDirectory(skillsDirectory)
+        val skillsDirectory = if (skillsPath != null) {
+            clonedRepo.localPath.resolve(skillsPath)
+        } else {
+            clonedRepo.localPath
         }
+
+        return loadSkillsFromDirectory(skillsDirectory)
     }
 
     /**
@@ -106,10 +117,11 @@ class GitHubSkillDefinitionLoader(
             throw SkillLoadException("Failed to clone GitHub repository: $owner/$repo", e)
         }
 
-        return clonedRepo.use { repo ->
-            val skillDirectory = repo.localPath.resolve(skillPath)
-            directorySkillDefinitionLoader.load(skillDirectory)
-        }
+        // Keep reference to prevent deletion - will be cleaned up on close()
+        clonedRepositories.add(clonedRepo)
+
+        val skillDirectory = clonedRepo.localPath.resolve(skillPath)
+        return directorySkillDefinitionLoader.load(skillDirectory)
     }
 
     /**
@@ -137,15 +149,16 @@ class GitHubSkillDefinitionLoader(
             throw SkillLoadException("Failed to clone Git repository: $url", e)
         }
 
-        return clonedRepo.use { repo ->
-            val skillsDirectory = if (skillsPath != null) {
-                repo.localPath.resolve(skillsPath)
-            } else {
-                repo.localPath
-            }
+        // Keep reference to prevent deletion - will be cleaned up on close()
+        clonedRepositories.add(clonedRepo)
 
-            loadSkillsFromDirectory(skillsDirectory)
+        val skillsDirectory = if (skillsPath != null) {
+            clonedRepo.localPath.resolve(skillsPath)
+        } else {
+            clonedRepo.localPath
         }
+
+        return loadSkillsFromDirectory(skillsDirectory)
     }
 
     private fun loadSkillsFromDirectory(directory: Path): List<LoadedSkill> {
@@ -159,6 +172,16 @@ class GitHubSkillDefinitionLoader(
         } else {
             // Multiple skills in subdirectories
             directorySkillDefinitionLoader.loadAll(directory)
+        }
+    }
+
+    /**
+     * Clean up all cloned repositories.
+     * This should be called when the loader is no longer needed.
+     */
+    override fun close() {
+        while (clonedRepositories.isNotEmpty()) {
+            clonedRepositories.poll()?.close()
         }
     }
 

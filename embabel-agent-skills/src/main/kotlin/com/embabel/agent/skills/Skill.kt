@@ -18,8 +18,11 @@ package com.embabel.agent.skills
 import com.embabel.agent.api.annotation.LlmTool
 import com.embabel.agent.api.common.LlmReference
 import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.skills.script.NoOpExecutionEngine
+import com.embabel.agent.skills.script.SkillScriptExecutionEngine
 import com.embabel.agent.skills.support.*
 import org.slf4j.LoggerFactory
+import java.util.concurrent.ConcurrentHashMap
 
 fun interface SkillFilter {
 
@@ -50,9 +53,16 @@ data class Skills @JvmOverloads constructor(
     ),
     private val frontMatterFormatter: SkillFrontMatterFormatter = ClaudeFrontMatterFormatter,
     private val filter: SkillFilter = SkillFilter { true },
+    private val scriptExecutionEngine: SkillScriptExecutionEngine = NoOpExecutionEngine,
 ) : LlmReference {
 
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    /**
+     * Tracks which skills have been activated. Script tools are only available
+     * for activated skills (lazy loading pattern).
+     */
+    private val activatedSkillNames: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     fun withFrontMatterFormatter(formatter: SkillFrontMatterFormatter): Skills {
         return copy(frontMatterFormatter = formatter)
@@ -60,6 +70,14 @@ data class Skills @JvmOverloads constructor(
 
     fun withFilter(filter: SkillFilter): Skills {
         return copy(filter = filter)
+    }
+
+    /**
+     * Set the script execution engine for running skill scripts.
+     * Script tools will only be available for activated skills.
+     */
+    fun withScriptExecutionEngine(engine: SkillScriptExecutionEngine): Skills {
+        return copy(scriptExecutionEngine = engine)
     }
 
     fun withSkills(vararg loadedSkills: LoadedSkill): Skills {
@@ -139,7 +157,18 @@ data class Skills @JvmOverloads constructor(
         return copy(skills = skills + loadedSkills)
     }
 
-    override fun tools(): List<Tool> = Tool.fromInstance(this)
+    override fun tools(): List<Tool> {
+        val annotationTools = Tool.fromInstance(this)
+
+        // Include script tools for ALL skills (not just activated ones).
+        // This is necessary because PromptRunner captures the tool list at startup
+        // and doesn't refresh it after activate() is called.
+        // The ScriptTool will still work - activation is only needed for instructions.
+        val scriptTools = skills
+            .flatMap { skill -> skill.getScriptTools(scriptExecutionEngine) }
+
+        return annotationTools + scriptTools
+    }
 
     override fun notes(): String {
         return """
@@ -158,15 +187,35 @@ data class Skills @JvmOverloads constructor(
      * Activate a skill by name, returning its full instructions.
      * This is the "lazy loading" mechanism - minimal metadata is shown in the system prompt,
      * but full instructions are only loaded when the skill is activated.
+     *
+     * Script tools for all skills are always available via [tools] - activation is only
+     * needed to load full instructions and resource information.
      */
-    @LlmTool(description = "Activate a skill by name to get its full instructions. Use this when you need to perform a task that matches a skill's description.")
+    @LlmTool(description = "Activate a skill by name to get its full instructions and learn about available script tools. Use this when you need to perform a task that matches a skill's description.")
     fun activate(
         @LlmTool.Param("name of the skill to activate") name: String,
     ): String {
         val skill = findSkill(name)
             ?: return "Skill not found: '$name'. Available skills: ${skills.map { it.name }}"
 
-        return skill.getActivationText()
+        // Track activation for potential future use
+        activatedSkillNames.add(skill.name)
+
+        val scriptTools = skill.getScriptTools(scriptExecutionEngine)
+        val activationText = skill.getActivationText()
+
+        return if (scriptTools.isNotEmpty()) {
+            val toolNames = scriptTools.map { it.definition.name }
+            """
+            |$activationText
+            |
+            |## Available Script Tools
+            |The following script tools can be used for this skill:
+            |${toolNames.joinToString("\n") { "- $it" }}
+            """.trimMargin()
+        } else {
+            activationText
+        }
     }
 
     /**

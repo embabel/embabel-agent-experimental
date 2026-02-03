@@ -15,6 +15,8 @@
  */
 package com.embabel.agent.skills.script
 
+import java.nio.file.Path
+
 /**
  * Engine for executing skill scripts.
  *
@@ -46,15 +48,21 @@ interface SkillScriptExecutionEngine {
     /**
      * Execute a script.
      *
+     * Scripts have access to two environment variables for file I/O:
+     * - `INPUT_DIR`: Directory containing input files (copied from [inputFiles])
+     * - `OUTPUT_DIR`: Directory where scripts should write output artifacts
+     *
      * @param script the script to execute
      * @param args arguments to pass to the script
      * @param stdin input to provide via standard input
+     * @param inputFiles paths to files that should be made available in INPUT_DIR
      * @return the execution result
      */
     fun execute(
         script: SkillScript,
         args: List<String> = emptyList(),
         stdin: String? = null,
+        inputFiles: List<Path> = emptyList(),
     ): ScriptExecutionResult
 
     /**
@@ -88,6 +96,7 @@ object NoOpExecutionEngine : SkillScriptExecutionEngine {
         script: SkillScript,
         args: List<String>,
         stdin: String?,
+        inputFiles: List<Path>,
     ): ScriptExecutionResult = ScriptExecutionResult.Denied(
         "Script execution is disabled. No execution engine is configured."
     )

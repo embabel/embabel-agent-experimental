@@ -292,6 +292,77 @@ echo "Some content here" > "${'$'}OUTPUT_DIR/output.txt"
         assertTrue(artifact.sizeBytes > 0)
     }
 
+    @Test
+    @EnabledOnOs(OS.MAC, OS.LINUX)
+    fun `execute makes input files available in INPUT_DIR`() {
+        val engine = ProcessExecutionEngine()
+        val script = createScript(
+            "test.sh",
+            ScriptLanguage.BASH,
+            """#!/bin/bash
+# List input files
+ls "${'$'}INPUT_DIR"
+# Copy input to output
+cat "${'$'}INPUT_DIR/input.txt" > "${'$'}OUTPUT_DIR/output.txt"
+"""
+        )
+
+        // Create an input file
+        val inputFile = tempDir.resolve("input.txt")
+        Files.writeString(inputFile, "Hello from input file")
+
+        val result = engine.execute(script, inputFiles = listOf(inputFile))
+
+        assertTrue(result is ScriptExecutionResult.Success)
+        val success = result as ScriptExecutionResult.Success
+        assertTrue(success.stdout.contains("input.txt"))
+        assertEquals(1, success.artifacts.size)
+
+        // Verify the content was copied
+        val outputContent = Files.readString(success.artifacts[0].path)
+        assertEquals("Hello from input file", outputContent)
+    }
+
+    @Test
+    @EnabledOnOs(OS.MAC, OS.LINUX)
+    fun `execute handles multiple input files`() {
+        val engine = ProcessExecutionEngine()
+        val script = createScript(
+            "test.sh",
+            ScriptLanguage.BASH,
+            """#!/bin/bash
+# Count input files
+ls -1 "${'$'}INPUT_DIR" | wc -l | tr -d ' '
+"""
+        )
+
+        // Create multiple input files
+        val inputFile1 = tempDir.resolve("file1.txt")
+        val inputFile2 = tempDir.resolve("file2.txt")
+        val inputFile3 = tempDir.resolve("file3.pdf")
+        Files.writeString(inputFile1, "content1")
+        Files.writeString(inputFile2, "content2")
+        Files.writeString(inputFile3, "content3")
+
+        val result = engine.execute(script, inputFiles = listOf(inputFile1, inputFile2, inputFile3))
+
+        assertTrue(result is ScriptExecutionResult.Success)
+        val success = result as ScriptExecutionResult.Success
+        assertTrue(success.stdout.trim().contains("3"))
+    }
+
+    @Test
+    fun `execute returns Denied for non-existent input file`() {
+        val engine = ProcessExecutionEngine()
+        val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\necho ok")
+
+        val nonExistentFile = tempDir.resolve("does-not-exist.txt")
+        val result = engine.execute(script, inputFiles = listOf(nonExistentFile))
+
+        assertTrue(result is ScriptExecutionResult.Denied)
+        assertTrue((result as ScriptExecutionResult.Denied).reason.contains("does not exist"))
+    }
+
     private fun createScript(
         fileName: String,
         language: ScriptLanguage,
