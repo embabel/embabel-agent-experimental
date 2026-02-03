@@ -111,7 +111,77 @@ Validation can be disabled:
 val loader = DefaultDirectorySkillDefinitionLoader(validateFileReferences = false)
 ```
 
+## Script Execution
+
+Skills can include executable scripts in their `scripts/` directory. To enable script execution, configure a `SkillScriptExecutionEngine`:
+
+### ProcessExecutionEngine (Direct)
+
+Runs scripts directly on the host machine:
+
+```kotlin
+import com.embabel.agent.skills.script.ProcessExecutionEngine
+import com.embabel.agent.skills.script.ScriptLanguage
+import kotlin.time.Duration.Companion.seconds
+
+val engine = ProcessExecutionEngine(
+    timeout = 30.seconds,
+    supportedLanguages = setOf(ScriptLanguage.PYTHON, ScriptLanguage.BASH),
+)
+
+val skills = Skills("my-skills", "Skills with scripts")
+    .withGitHubUrl("https://github.com/anthropics/skills/tree/main/skills/pdf")
+    .withScriptExecutionEngine(engine)
+```
+
+### DockerExecutionEngine (Sandboxed)
+
+Runs scripts in an isolated Docker container for security:
+
+```kotlin
+import com.embabel.agent.skills.script.DockerExecutionEngine
+
+val engine = DockerExecutionEngine(
+    image = "embabel/agent-sandbox:latest",
+    timeout = 60.seconds,
+    supportedLanguages = setOf(ScriptLanguage.PYTHON, ScriptLanguage.BASH),
+    memoryLimit = "512m",
+    cpuLimit = "1.0",
+)
+
+val skills = Skills("my-skills", "Skills with sandboxed scripts")
+    .withGitHubUrl("https://github.com/anthropics/skills/tree/main/skills/pdf")
+    .withScriptExecutionEngine(engine)
+```
+
+**Building the sandbox image:**
+
+```bash
+docker build -t embabel/agent-sandbox:latest ./embabel-agent-skills/docker
+```
+
+The sandbox image includes:
+- Python 3 with common packages (pypdf, pdf2image, pillow, requests, pyyaml, jinja2)
+- Node.js and npm
+- Common CLI tools (git, jq, curl, ripgrep, etc.)
+
+**Maximum isolation:**
+
+```kotlin
+val engine = DockerExecutionEngine.isolated()  // No network, limited CPU/memory
+```
+
+### Script Environment
+
+Scripts receive these environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `INPUT_DIR` | Directory containing input files (read-only in Docker) |
+| `OUTPUT_DIR` | Directory for output artifacts |
+
+Output files written to `OUTPUT_DIR` are collected as artifacts after execution.
+
 ## Limitations
 
-- **Script execution**: Skills with `scripts/` directories log a warning. Script execution is not yet supported.
 - **allowed-tools**: The field is parsed but not enforced.

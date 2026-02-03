@@ -23,16 +23,15 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
-class ProcessExecutionEngineTest {
+class ProcessSkillScriptExecutionEngineTest {
 
     @TempDir
     lateinit var tempDir: Path
 
     @Test
     fun `supportedLanguages returns configured languages`() {
-        val engine = ProcessExecutionEngine(
+        val engine = ProcessSkillScriptExecutionEngine(
             supportedLanguages = setOf(ScriptLanguage.BASH, ScriptLanguage.PYTHON)
         )
 
@@ -41,7 +40,7 @@ class ProcessExecutionEngineTest {
 
     @Test
     fun `validate returns Denied for unsupported language`() {
-        val engine = ProcessExecutionEngine(
+        val engine = ProcessSkillScriptExecutionEngine(
             supportedLanguages = setOf(ScriptLanguage.BASH)
         )
 
@@ -54,7 +53,7 @@ class ProcessExecutionEngineTest {
 
     @Test
     fun `validate returns Denied for missing script file`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
 
         val script = SkillScript(
             skillName = "test",
@@ -71,7 +70,7 @@ class ProcessExecutionEngineTest {
 
     @Test
     fun `validate returns null for valid script`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.sh", ScriptLanguage.BASH, "echo hello")
 
         val result = engine.validate(script)
@@ -82,7 +81,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute runs bash script successfully`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\necho 'Hello World'")
 
         val result = engine.execute(script)
@@ -96,7 +95,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute captures stderr`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\necho 'error message' >&2")
 
         val result = engine.execute(script)
@@ -109,7 +108,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute captures non-zero exit code`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\nexit 42")
 
         val result = engine.execute(script)
@@ -122,7 +121,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute passes arguments to script`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\necho \"Args: \$1 \$2\"")
 
         val result = engine.execute(script, args = listOf("foo", "bar"))
@@ -135,7 +134,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute provides stdin to script`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\nread input\necho \"Got: \$input\"")
 
         val result = engine.execute(script, stdin = "hello from stdin")
@@ -148,7 +147,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute times out long-running script`() {
-        val engine = ProcessExecutionEngine(timeout = 500.milliseconds)
+        val engine = ProcessSkillScriptExecutionEngine(timeout = 500.milliseconds)
         val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\nsleep 10")
 
         val result = engine.execute(script)
@@ -162,7 +161,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute records duration`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\necho ok")
 
         val result = engine.execute(script)
@@ -175,7 +174,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute uses custom environment variables`() {
-        val engine = ProcessExecutionEngine(
+        val engine = ProcessSkillScriptExecutionEngine(
             environment = mapOf("MY_VAR" to "my_value"),
             inheritEnvironment = true,
         )
@@ -191,7 +190,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute works with Python scripts`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.py", ScriptLanguage.PYTHON, "print('Hello from Python')")
 
         val result = engine.execute(script)
@@ -210,7 +209,7 @@ class ProcessExecutionEngineTest {
 
     @Test
     fun `execute returns Denied for unsupported language`() {
-        val engine = ProcessExecutionEngine(
+        val engine = ProcessSkillScriptExecutionEngine(
             supportedLanguages = setOf(ScriptLanguage.BASH)
         )
         val script = createScript("test.py", ScriptLanguage.PYTHON, "print('hello')")
@@ -223,7 +222,7 @@ class ProcessExecutionEngineTest {
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute collects artifacts from OUTPUT_DIR`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript(
             "test.sh",
             ScriptLanguage.BASH,
@@ -260,7 +259,7 @@ echo "Done"
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute returns empty artifacts when nothing written to OUTPUT_DIR`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\necho 'no artifacts'")
 
         val result = engine.execute(script)
@@ -273,7 +272,7 @@ echo "Done"
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `artifacts include file sizes`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript(
             "test.sh",
             ScriptLanguage.BASH,
@@ -295,7 +294,7 @@ echo "Some content here" > "${'$'}OUTPUT_DIR/output.txt"
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute makes input files available in INPUT_DIR`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript(
             "test.sh",
             ScriptLanguage.BASH,
@@ -326,7 +325,7 @@ cat "${'$'}INPUT_DIR/input.txt" > "${'$'}OUTPUT_DIR/output.txt"
     @Test
     @EnabledOnOs(OS.MAC, OS.LINUX)
     fun `execute handles multiple input files`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript(
             "test.sh",
             ScriptLanguage.BASH,
@@ -353,7 +352,7 @@ ls -1 "${'$'}INPUT_DIR" | wc -l | tr -d ' '
 
     @Test
     fun `execute returns Denied for non-existent input file`() {
-        val engine = ProcessExecutionEngine()
+        val engine = ProcessSkillScriptExecutionEngine()
         val script = createScript("test.sh", ScriptLanguage.BASH, "#!/bin/bash\necho ok")
 
         val nonExistentFile = tempDir.resolve("does-not-exist.txt")

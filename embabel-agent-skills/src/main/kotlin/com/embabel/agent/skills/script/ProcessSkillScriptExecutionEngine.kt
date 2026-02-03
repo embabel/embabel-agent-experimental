@@ -39,7 +39,7 @@ import kotlin.time.measureTimedValue
  * - Development and testing environments
  * - Scenarios where OS-level user permissions provide adequate isolation
  *
- * For untrusted scripts, consider using [DockerExecutionEngine] or
+ * For untrusted scripts, consider using [DockerSkillScriptExecutionEngine] or
  * [GraalVMExecutionEngine] which provide stronger isolation.
  *
  * @param timeout maximum execution time before the process is killed
@@ -48,7 +48,7 @@ import kotlin.time.measureTimedValue
  * @param environment environment variables to pass to scripts (defaults to inheriting current env)
  * @param inheritEnvironment whether to inherit the current process environment
  */
-class ProcessExecutionEngine(
+class ProcessSkillScriptExecutionEngine(
     private val timeout: Duration = 30.seconds,
     private val supportedLanguages: Set<ScriptLanguage> = ScriptLanguage.entries.toSet(),
     private val interpreters: Map<ScriptLanguage, List<String>> = defaultInterpreters,
