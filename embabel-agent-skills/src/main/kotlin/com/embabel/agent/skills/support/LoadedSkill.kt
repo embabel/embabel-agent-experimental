@@ -15,6 +15,11 @@
  */
 package com.embabel.agent.skills.support
 
+import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.skills.script.ScriptLanguage
+import com.embabel.agent.skills.script.ScriptTool
+import com.embabel.agent.skills.script.SkillScript
+import com.embabel.agent.skills.script.SkillScriptExecutionEngine
 import com.embabel.agent.skills.spec.SkillMetadata
 
 import java.nio.file.Files
@@ -183,6 +188,58 @@ data class LoadedSkill(
             FileReferenceValidationResult(
                 isValid = false,
                 missingFiles = missingFiles,
+            )
+        }
+    }
+
+    /**
+     * Get executable tools for this skill's scripts.
+     *
+     * Each script in the skill's `scripts/` directory becomes a [Tool] that can be
+     * invoked by an LLM. Only scripts with recognized languages that are supported
+     * by the provided engine are included.
+     *
+     * @param engine the execution engine that will run the scripts
+     * @return list of tools, one per executable script
+     */
+    fun getScriptTools(engine: SkillScriptExecutionEngine): List<Tool> {
+        return listResources(ResourceType.SCRIPTS).mapNotNull { fileName ->
+            val language = ScriptLanguage.fromFileName(fileName)
+                ?: return@mapNotNull null
+
+            if (language !in engine.supportedLanguages()) {
+                return@mapNotNull null
+            }
+
+            val script = SkillScript(
+                skillName = name,
+                fileName = fileName,
+                language = language,
+                basePath = basePath,
+            )
+
+            ScriptTool(script, engine)
+        }
+    }
+
+    /**
+     * Get all scripts in this skill as [SkillScript] objects.
+     *
+     * This returns all scripts regardless of whether they can be executed.
+     * Use [getScriptTools] to get only executable scripts filtered by engine support.
+     *
+     * @return list of all scripts in this skill
+     */
+    fun getScripts(): List<SkillScript> {
+        return listResources(ResourceType.SCRIPTS).mapNotNull { fileName ->
+            val language = ScriptLanguage.fromFileName(fileName)
+                ?: return@mapNotNull null
+
+            SkillScript(
+                skillName = name,
+                fileName = fileName,
+                language = language,
+                basePath = basePath,
             )
         }
     }
