@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.skills.sandbox
+package com.embabel.agent.sandbox
 
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration
 
 /**
@@ -31,18 +33,42 @@ import kotlin.time.Duration
  * - **DockerExecutor**: Container isolation (strong)
  * - **NoOpExecutor**: Denies all execution (safe default)
  *
+ * ## Environment Variables
+ *
+ * All executors provide these environment variables to commands:
+ * - `INPUT_DIR`: Directory containing input files (read-only)
+ * - `OUTPUT_DIR`: Directory where commands can write artifacts
+ *
  * @see ExecutionRequest
  * @see ExecutionResult
  */
 interface SandboxedExecutor {
 
     /**
-     * Execute a command in the sandbox.
+     * Execute a command in the sandbox synchronously.
      *
      * @param request the execution request
      * @return the execution result
      */
     fun execute(request: ExecutionRequest): ExecutionResult
+
+    /**
+     * Execute a command in the sandbox asynchronously.
+     *
+     * This allows for:
+     * - Starting long-running tasks without blocking
+     * - Cancelling execution mid-flight
+     * - Getting partial output while running
+     *
+     * Default implementation wraps [execute] in a [CompletableFuture].
+     * Implementations can override for better streaming and cancellation support.
+     *
+     * @param request the execution request
+     * @return an [AsyncExecution] handle for monitoring and controlling the execution
+     */
+    fun executeAsync(request: ExecutionRequest): AsyncExecution {
+        return DefaultAsyncExecution(this, request)
+    }
 
     /**
      * Check if the executor is available and properly configured.
@@ -58,6 +84,111 @@ interface SandboxedExecutor {
      * @return null if valid, or a [ExecutionResult.Denied] with reason
      */
     fun validate(request: ExecutionRequest): ExecutionResult.Denied? = null
+}
+
+/**
+ * Handle for an asynchronous execution.
+ *
+ * Allows monitoring progress, getting partial output, and cancelling execution.
+ */
+interface AsyncExecution {
+
+    /**
+     * Whether the execution is still running.
+     */
+    val isRunning: Boolean
+
+    /**
+     * Whether the execution was cancelled.
+     */
+    val isCancelled: Boolean
+
+    /**
+     * Wait for completion and get the result.
+     *
+     * @return the execution result
+     */
+    fun await(): ExecutionResult
+
+    /**
+     * Wait for completion with a timeout.
+     *
+     * @param timeout maximum time to wait
+     * @return the result, or [ExecutionResult.TimedOut] if the wait times out
+     */
+    fun await(timeout: Duration): ExecutionResult
+
+    /**
+     * Cancel the execution.
+     *
+     * @return true if cancellation was initiated, false if already completed
+     */
+    fun cancel(): Boolean
+
+    /**
+     * Get partial stdout captured so far (if available).
+     *
+     * Not all implementations support streaming output.
+     *
+     * @return partial output, or null if not supported
+     */
+    fun getPartialStdout(): String? = null
+
+    /**
+     * Get partial stderr captured so far (if available).
+     *
+     * @return partial stderr, or null if not supported
+     */
+    fun getPartialStderr(): String? = null
+
+    /**
+     * Get a [CompletableFuture] that completes when execution finishes.
+     */
+    fun toFuture(): CompletableFuture<ExecutionResult>
+}
+
+/**
+ * Default implementation of [AsyncExecution] that wraps synchronous execution.
+ */
+private class DefaultAsyncExecution(
+    private val executor: SandboxedExecutor,
+    private val request: ExecutionRequest,
+) : AsyncExecution {
+
+    private val cancelled = AtomicBoolean(false)
+    private val future: CompletableFuture<ExecutionResult> = CompletableFuture.supplyAsync {
+        if (cancelled.get()) {
+            ExecutionResult.Failed("Execution was cancelled before starting")
+        } else {
+            executor.execute(request)
+        }
+    }
+
+    override val isRunning: Boolean
+        get() = !future.isDone
+
+    override val isCancelled: Boolean
+        get() = cancelled.get()
+
+    override fun await(): ExecutionResult = future.get()
+
+    override fun await(timeout: Duration): ExecutionResult {
+        return try {
+            future.get(timeout.inWholeMilliseconds, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            ExecutionResult.TimedOut(duration = timeout)
+        }
+    }
+
+    override fun cancel(): Boolean {
+        if (cancelled.compareAndSet(false, true)) {
+            future.cancel(true)
+            return true
+        }
+        return false
+    }
+
+    override fun toFuture(): CompletableFuture<ExecutionResult> = future
 }
 
 /**

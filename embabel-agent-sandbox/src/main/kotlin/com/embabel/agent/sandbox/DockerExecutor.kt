@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.skills.sandbox
+package com.embabel.agent.sandbox
 
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -28,24 +28,34 @@ import kotlin.time.measureTime
  * Docker-based executor that runs commands inside containers for strong isolation.
  *
  * This provides isolation from the host system while still allowing commands to:
- * - Read input files via INPUT_DIR mount
- * - Write output artifacts via OUTPUT_DIR mount
+ * - Read input files via INPUT_DIR mount (/input)
+ * - Write output artifacts via OUTPUT_DIR mount (/output)
  * - Optionally mount a working directory
  * - Access network (can be disabled)
  *
- * ## Usage
+ * ## Example
  *
  * ```kotlin
  * val executor = DockerExecutor(
- *     image = "node:20-slim",
+ *     image = "python:3.11-slim",
  *     networkEnabled = false,
+ *     memoryLimit = "256m",
  * )
  *
  * val result = executor.execute(ExecutionRequest(
- *     command = listOf("node", "script.js"),
+ *     command = listOf("python3", "-c", "print('Hello from container')"),
  *     timeout = 30.seconds,
  * ))
  * ```
+ *
+ * ## Security
+ *
+ * For maximum isolation, use:
+ * ```kotlin
+ * val executor = DockerExecutor.isolated(image = "my-image")
+ * ```
+ *
+ * This disables networking and applies strict resource limits.
  *
  * @param image the Docker image to use
  * @param networkEnabled whether to allow network access
@@ -54,7 +64,8 @@ import kotlin.time.measureTime
  * @param baseEnvironment base environment variables for all executions
  * @param user user to run as inside the container
  * @param workDir working directory inside the container
- * @param mounts additional volume mounts (host:container:mode)
+ * @param mounts additional volume mounts
+ * @param readOnlyRootfs whether to mount the root filesystem as read-only
  */
 class DockerExecutor(
     private val image: String,
@@ -65,6 +76,7 @@ class DockerExecutor(
     private val user: String? = null,
     private val workDir: String? = null,
     private val mounts: List<Mount> = emptyList(),
+    private val readOnlyRootfs: Boolean = false,
 ) : SandboxedExecutor {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -209,6 +221,13 @@ class DockerExecutor(
             command.addAll(listOf("--network", "none"))
         }
 
+        // Read-only root filesystem
+        if (readOnlyRootfs) {
+            command.add("--read-only")
+            // Add a tmpfs for /tmp since many programs need it
+            command.addAll(listOf("--tmpfs", "/tmp:rw,noexec,nosuid,size=64m"))
+        }
+
         // User
         user?.let { command.addAll(listOf("--user", it)) }
 
@@ -314,7 +333,35 @@ class DockerExecutor(
         }
 
         /**
+         * Pull a Docker image if it doesn't exist locally.
+         *
+         * @return true if the image is available (already existed or was pulled)
+         */
+        fun ensureImage(image: String): Boolean {
+            if (imageExists(image)) {
+                return true
+            }
+
+            logger.info("Pulling Docker image: {}", image)
+            return try {
+                val process = ProcessBuilder("docker", "pull", image)
+                    .inheritIO()
+                    .start()
+                process.waitFor() == 0
+            } catch (e: Exception) {
+                logger.error("Failed to pull image {}: {}", image, e.message)
+                false
+            }
+        }
+
+        /**
          * Create a maximally isolated executor.
+         *
+         * This configuration:
+         * - Disables networking
+         * - Limits memory to 256MB
+         * - Limits CPU to 0.5 cores
+         * - Mounts root filesystem as read-only
          */
         fun isolated(
             image: String = DEFAULT_SANDBOX_IMAGE,
@@ -323,21 +370,37 @@ class DockerExecutor(
             networkEnabled = false,
             memoryLimit = "256m",
             cpuLimit = "0.5",
+            readOnlyRootfs = true,
         )
 
         /**
-         * Create an executor for Claude Code with appropriate settings.
+         * Create an executor suitable for running Claude Code.
          *
-         * Note: Claude Code needs network access for API calls and
-         * the working directory mounted read-write for file operations.
+         * Claude Code needs:
+         * - Network access for API calls
+         * - More memory for complex operations
+         * - Read-write access to working directory
          */
         fun forClaudeCode(
             image: String = "node:20-slim",
         ) = DockerExecutor(
             image = image,
-            networkEnabled = true, // Needed for Anthropic API calls
-            memoryLimit = "2g",    // Claude Code can use significant memory
+            networkEnabled = true,
+            memoryLimit = "2g",
             cpuLimit = "2.0",
+        )
+
+        /**
+         * Create an executor suitable for running Python scripts.
+         */
+        fun forPython(
+            image: String = "python:3.11-slim",
+            networkEnabled: Boolean = false,
+        ) = DockerExecutor(
+            image = image,
+            networkEnabled = networkEnabled,
+            memoryLimit = "512m",
+            cpuLimit = "1.0",
         )
     }
 }

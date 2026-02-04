@@ -15,15 +15,16 @@
  */
 package com.embabel.agent.claudecode
 
-import com.embabel.agent.skills.sandbox.DockerExecutor
-import com.embabel.agent.skills.sandbox.ExecutionRequest
-import com.embabel.agent.skills.sandbox.ExecutionResult
-import com.embabel.agent.skills.sandbox.ProcessExecutor
-import com.embabel.agent.skills.sandbox.SandboxedExecutor
+import com.embabel.agent.sandbox.AsyncExecution
+import com.embabel.agent.sandbox.DockerExecutor
+import com.embabel.agent.sandbox.ExecutionRequest
+import com.embabel.agent.sandbox.ExecutionResult
+import com.embabel.agent.sandbox.SandboxedExecutor
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -168,6 +169,109 @@ class ClaudeCodeExecutor(
             executeSandboxed(command, workingDirectory, timeout)
         } else {
             executeDirect(command, workingDirectory, timeout)
+        }
+    }
+
+    /**
+     * Execute Claude Code asynchronously.
+     *
+     * This is useful for long-running tasks where you want to:
+     * - Monitor progress without blocking
+     * - Cancel execution if needed
+     * - Run multiple Claude Code instances concurrently
+     *
+     * @param prompt the task/prompt to execute
+     * @param workingDirectory the working directory for execution
+     * @param allowedTools list of tools Claude Code is allowed to use (null = all tools)
+     * @param maxTurns maximum number of agentic turns before stopping
+     * @param permissionMode how to handle permission requests
+     * @param timeout maximum execution time
+     * @param sessionId optional session ID to resume a previous session
+     * @param model optional model to use (e.g., "sonnet", "opus")
+     * @param systemPrompt optional system prompt to prepend
+     * @return a [ClaudeCodeAsyncExecution] handle for monitoring and controlling the execution
+     */
+    fun executeAsync(
+        prompt: String,
+        workingDirectory: Path? = null,
+        allowedTools: List<ClaudeCodeAllowedTool>? = null,
+        maxTurns: Int? = null,
+        permissionMode: ClaudeCodePermissionMode = defaultPermissionMode,
+        timeout: Duration = defaultTimeout,
+        sessionId: String? = null,
+        model: String? = null,
+        systemPrompt: String? = null,
+    ): ClaudeCodeAsyncExecution {
+        // Check availability first
+        checkAvailability()?.let {
+            return ClaudeCodeAsyncExecution.denied(it)
+        }
+
+        val command = buildCommand(
+            prompt = prompt,
+            allowedTools = allowedTools,
+            maxTurns = maxTurns,
+            permissionMode = permissionMode,
+            sessionId = sessionId,
+            model = model,
+            systemPrompt = systemPrompt,
+        )
+
+        logger.debug(
+            "Executing Claude Code async: {} with {} allowed tools, max turns: {}",
+            prompt.take(100),
+            allowedTools?.size ?: "all",
+            maxTurns ?: "unlimited"
+        )
+
+        return if (sandboxExecutor != null) {
+            executeAsyncSandboxed(command, workingDirectory, timeout)
+        } else {
+            executeAsyncDirect(command, workingDirectory, timeout)
+        }
+    }
+
+    private fun executeAsyncSandboxed(
+        command: List<String>,
+        workingDirectory: Path?,
+        timeout: Duration,
+    ): ClaudeCodeAsyncExecution {
+        val executor = sandboxExecutor
+            ?: return ClaudeCodeAsyncExecution.denied(ClaudeCodeResult.Denied("No sandbox executor configured"))
+
+        val request = ExecutionRequest(
+            command = command,
+            workingDirectory = workingDirectory,
+            environment = environment + mapOf("CI" to "true"),
+            timeout = timeout,
+        )
+
+        val asyncExecution = executor.executeAsync(request)
+        return ClaudeCodeAsyncExecution(asyncExecution, timeout) { result ->
+            convertExecutionResult(result, timeout)
+        }
+    }
+
+    private fun executeAsyncDirect(
+        command: List<String>,
+        workingDirectory: Path?,
+        timeout: Duration,
+    ): ClaudeCodeAsyncExecution {
+        return ClaudeCodeAsyncExecution.direct(command, workingDirectory, environment, timeout) { stdout, exitCode, duration ->
+            parseOutput(stdout, exitCode, duration)
+        }
+    }
+
+    private fun convertExecutionResult(result: ExecutionResult, timeout: Duration): ClaudeCodeResult {
+        return when (result) {
+            is ExecutionResult.Completed -> parseOutput(result.stdout, result.exitCode, result.duration)
+            is ExecutionResult.TimedOut -> ClaudeCodeResult.Failure(
+                error = "Execution timed out after $timeout",
+                timedOut = true,
+                duration = result.duration,
+            )
+            is ExecutionResult.Failed -> ClaudeCodeResult.Failure(error = result.error)
+            is ExecutionResult.Denied -> ClaudeCodeResult.Denied(result.reason)
         }
     }
 

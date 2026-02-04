@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.skills.sandbox
+package com.embabel.agent.sandbox
 
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals

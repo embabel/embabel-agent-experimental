@@ -115,16 +115,16 @@ val loader = DefaultDirectorySkillDefinitionLoader(validateFileReferences = fals
 
 Skills can include executable scripts in their `scripts/` directory. To enable script execution, configure a `SkillScriptExecutionEngine`:
 
-### ProcessExecutionEngine (Direct)
+### ProcessSkillScriptExecutionEngine (Direct)
 
 Runs scripts directly on the host machine:
 
 ```kotlin
-import com.embabel.agent.skills.script.ProcessExecutionEngine
+import com.embabel.agent.skills.script.ProcessSkillScriptExecutionEngine
 import com.embabel.agent.skills.script.ScriptLanguage
 import kotlin.time.Duration.Companion.seconds
 
-val engine = ProcessExecutionEngine(
+val engine = ProcessSkillScriptExecutionEngine(
     timeout = 30.seconds,
     supportedLanguages = setOf(ScriptLanguage.PYTHON, ScriptLanguage.BASH),
 )
@@ -134,14 +134,14 @@ val skills = Skills("my-skills", "Skills with scripts")
     .withScriptExecutionEngine(engine)
 ```
 
-### DockerExecutionEngine (Sandboxed)
+### DockerSkillScriptExecutionEngine (Sandboxed)
 
-Runs scripts in an isolated Docker container for security:
+Runs scripts in an isolated Docker container for security. This delegates to `DockerExecutor` from the `embabel-agent-sandbox` module:
 
 ```kotlin
-import com.embabel.agent.skills.script.DockerExecutionEngine
+import com.embabel.agent.skills.script.DockerSkillScriptExecutionEngine
 
-val engine = DockerExecutionEngine(
+val engine = DockerSkillScriptExecutionEngine(
     image = "embabel/agent-sandbox:latest",
     timeout = 60.seconds,
     supportedLanguages = setOf(ScriptLanguage.PYTHON, ScriptLanguage.BASH),
@@ -168,7 +168,7 @@ The sandbox image includes:
 **Maximum isolation:**
 
 ```kotlin
-val engine = DockerExecutionEngine.isolated()  // No network, limited CPU/memory
+val engine = DockerSkillScriptExecutionEngine.isolated()  // No network, limited CPU/memory
 ```
 
 ### Script Environment
@@ -181,6 +181,24 @@ Scripts receive these environment variables:
 | `OUTPUT_DIR` | Directory for output artifacts |
 
 Output files written to `OUTPUT_DIR` are collected as artifacts after execution.
+
+### Input File Security
+
+Both execution engines use `FileTools` for secure input file path resolution:
+
+- Paths are resolved relative to a configurable root directory (defaults to current working directory)
+- Path traversal attempts (e.g., `../../../etc/passwd`) are blocked
+- Only files within the root directory can be accessed
+
+To customize the root directory:
+
+```kotlin
+import com.embabel.agent.tools.file.FileTools
+
+val engine = DockerSkillScriptExecutionEngine(
+    fileTools = FileTools.readWrite("/path/to/allowed/directory"),
+)
+```
 
 ## Limitations
 

@@ -15,6 +15,7 @@
 
     <modules>
         <module>embabel-agent-experimental-bom</module>
+        <module>embabel-agent-sandbox</module>
         <module>embabel-agent-claude-code</module>
         <module>embabel-agent-discord</module>
         <module>embabel-agent-eval</module>

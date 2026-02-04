@@ -30,6 +30,12 @@
             <artifactId>embabel-agent-code</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-sandbox</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- YAML Parsing -->
         <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.skills.sandbox
+package com.embabel.agent.sandbox
 
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -37,6 +37,24 @@ import kotlin.time.measureTimedValue
  * - Scenarios where OS-level user permissions provide adequate isolation
  *
  * For untrusted commands, use [DockerExecutor] instead.
+ *
+ * ## Example
+ *
+ * ```kotlin
+ * val executor = ProcessExecutor()
+ *
+ * val result = executor.execute(ExecutionRequest(
+ *     command = listOf("python3", "script.py"),
+ *     timeout = 30.seconds,
+ * ))
+ *
+ * when (result) {
+ *     is ExecutionResult.Completed -> println("Output: ${result.stdout}")
+ *     is ExecutionResult.TimedOut -> println("Timed out!")
+ *     is ExecutionResult.Failed -> println("Failed: ${result.error}")
+ *     is ExecutionResult.Denied -> println("Denied: ${result.reason}")
+ * }
+ * ```
  *
  * @param baseEnvironment base environment variables for all executions
  * @param inheritEnvironment whether to inherit the current process environment

@@ -27,7 +27,7 @@
 
         <dependency>
             <groupId>com.embabel.agent</groupId>
-            <artifactId>embabel-agent-skills</artifactId>
+            <artifactId>embabel-agent-sandbox</artifactId>
             <version>${project.version}</version>
         </dependency>
 
