@@ -158,18 +158,38 @@ class ClaudeCodeExecutor(
             systemPrompt = systemPrompt,
         )
 
-        logger.debug(
-            "Executing Claude Code: {} with {} allowed tools, max turns: {}",
-            prompt.take(100),
+        logger.info(
+            "Executing Claude Code: \"{}\" (allowed tools: {}, max turns: {})",
+            prompt.take(80),
             allowedTools?.size ?: "all",
             maxTurns ?: "unlimited"
         )
 
-        return if (sandboxExecutor != null) {
+        val result = if (sandboxExecutor != null) {
             executeSandboxed(command, workingDirectory, timeout)
         } else {
             executeDirect(command, workingDirectory, timeout)
         }
+
+        when (result) {
+            is ClaudeCodeResult.Success -> logger.info(
+                "Claude Code completed: {} turns, cost \${}, duration {}",
+                result.numTurns,
+                "%.4f".format(result.costUsd),
+                result.duration ?: "unknown"
+            )
+            is ClaudeCodeResult.Failure -> logger.warn(
+                "Claude Code failed: {} (timed out: {})",
+                result.error.take(100),
+                result.timedOut
+            )
+            is ClaudeCodeResult.Denied -> logger.warn(
+                "Claude Code denied: {}",
+                result.reason
+            )
+        }
+
+        return result
     }
 
     /**
@@ -217,9 +237,9 @@ class ClaudeCodeExecutor(
             systemPrompt = systemPrompt,
         )
 
-        logger.debug(
-            "Executing Claude Code async: {} with {} allowed tools, max turns: {}",
-            prompt.take(100),
+        logger.info(
+            "Executing Claude Code (async): \"{}\" (allowed tools: {}, max turns: {})",
+            prompt.take(80),
             allowedTools?.size ?: "all",
             maxTurns ?: "unlimited"
         )

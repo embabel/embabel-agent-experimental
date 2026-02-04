@@ -19,6 +19,7 @@ import com.embabel.agent.sandbox.AsyncExecution
 import com.embabel.agent.sandbox.ExecutionResult
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
+import org.slf4j.LoggerFactory
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -218,6 +219,8 @@ class ClaudeCodeAsyncExecution internal constructor(
     private val resultConverter: (ExecutionResult) -> ClaudeCodeResult,
 ) {
 
+    private val logger = LoggerFactory.getLogger(ClaudeCodeAsyncExecution::class.java)
+
     /**
      * Whether the execution is still running.
      */
@@ -236,7 +239,9 @@ class ClaudeCodeAsyncExecution internal constructor(
      * @return the Claude Code result
      */
     fun await(): ClaudeCodeResult {
-        return resultConverter(underlying.await())
+        val result = resultConverter(underlying.await())
+        logResult(result)
+        return result
     }
 
     /**
@@ -246,7 +251,29 @@ class ClaudeCodeAsyncExecution internal constructor(
      * @return the result, or [ClaudeCodeResult.Failure] with timedOut=true if the wait times out
      */
     fun await(timeout: Duration): ClaudeCodeResult {
-        return resultConverter(underlying.await(timeout))
+        val result = resultConverter(underlying.await(timeout))
+        logResult(result)
+        return result
+    }
+
+    private fun logResult(result: ClaudeCodeResult) {
+        when (result) {
+            is ClaudeCodeResult.Success -> logger.info(
+                "Claude Code (async) completed: {} turns, cost \${}, duration {}",
+                result.numTurns,
+                "%.4f".format(result.costUsd),
+                result.duration ?: "unknown"
+            )
+            is ClaudeCodeResult.Failure -> logger.warn(
+                "Claude Code (async) failed: {} (timed out: {})",
+                result.error.take(100),
+                result.timedOut
+            )
+            is ClaudeCodeResult.Denied -> logger.warn(
+                "Claude Code (async) denied: {}",
+                result.reason
+            )
+        }
     }
 
     /**
