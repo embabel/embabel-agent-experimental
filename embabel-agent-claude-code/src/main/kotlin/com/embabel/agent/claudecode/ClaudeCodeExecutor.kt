@@ -60,6 +60,22 @@ import kotlin.time.Duration.Companion.minutes
  * )
  * ```
  *
+ * ## Permission Modes
+ *
+ * For fully non-interactive automation (CI/CD, batch processing), use
+ * [ClaudeCodePermissionMode.DANGEROUSLY_SKIP_PERMISSIONS] which passes
+ * `--dangerously-skip-permissions` to the CLI:
+ *
+ * ```kotlin
+ * val executor = ClaudeCodeExecutor(
+ *     defaultPermissionMode = ClaudeCodePermissionMode.DANGEROUSLY_SKIP_PERMISSIONS,
+ *     sandboxExecutor = DockerExecutor(image = "...", networkEnabled = false),
+ * )
+ * ```
+ *
+ * WARNING: Only use DANGEROUSLY_SKIP_PERMISSIONS in isolated environments with
+ * appropriate safeguards (Docker with network isolation, git checkpoints, etc.).
+ *
  * @param claudeCommand the command to run Claude Code (defaults to "claude")
  * @param defaultTimeout default timeout for executions
  * @param defaultPermissionMode default permission mode
@@ -132,6 +148,8 @@ class ClaudeCodeExecutor(
      * @param sessionId optional session ID to resume a previous session
      * @param model optional model to use (e.g., "sonnet", "opus")
      * @param systemPrompt optional system prompt to prepend
+     * @param streamOutput if true, log Claude's output as it streams (uses stream-json format)
+     * @param streamCallback optional callback to receive streaming events in real-time
      * @return the execution result
      */
     fun execute(
@@ -144,6 +162,8 @@ class ClaudeCodeExecutor(
         sessionId: String? = null,
         model: String? = null,
         systemPrompt: String? = null,
+        streamOutput: Boolean = false,
+        streamCallback: ((ClaudeStreamEvent) -> Unit)? = null,
     ): ClaudeCodeResult {
         // Check availability first
         checkAvailability()?.let { return it }
@@ -156,37 +176,55 @@ class ClaudeCodeExecutor(
             sessionId = sessionId,
             model = model,
             systemPrompt = systemPrompt,
+            streamOutput = streamOutput,
         )
 
         logger.info(
-            "Executing Claude Code: \"{}\" (allowed tools: {}, max turns: {})",
+            "Executing Claude Code: \"{}\" (allowed tools: {}, max turns: {}{})",
             prompt.take(80),
             allowedTools?.size ?: "all",
-            maxTurns ?: "unlimited"
+            maxTurns ?: "unlimited",
+            if (streamOutput) ", streaming" else ""
         )
 
         val result = if (sandboxExecutor != null) {
-            executeSandboxed(command, workingDirectory, timeout)
+            executeSandboxed(command, workingDirectory, timeout, streamOutput, streamCallback)
         } else {
-            executeDirect(command, workingDirectory, timeout)
+            executeDirect(command, workingDirectory, timeout, streamOutput, streamCallback)
         }
 
+        // Log final result - callbacks already invoked during streaming via logStreamLine
         when (result) {
-            is ClaudeCodeResult.Success -> logger.info(
-                "Claude Code completed: {} turns, cost \${}, duration {}",
-                result.numTurns,
-                "%.4f".format(result.costUsd),
-                result.duration ?: "unknown"
-            )
-            is ClaudeCodeResult.Failure -> logger.warn(
-                "Claude Code failed: {} (timed out: {})",
-                result.error.take(100),
-                result.timedOut
-            )
-            is ClaudeCodeResult.Denied -> logger.warn(
-                "Claude Code denied: {}",
-                result.reason
-            )
+            is ClaudeCodeResult.Success -> {
+                logger.info(
+                    "Claude Code completed: {} turns, cost \${}, duration {}",
+                    result.numTurns,
+                    "%.4f".format(result.costUsd),
+                    result.duration ?: "unknown"
+                )
+                // For non-streaming mode, invoke callback with final result
+                if (!streamOutput) {
+                    streamCallback?.invoke(ClaudeStreamEvent.Text(result.result))
+                    streamCallback?.invoke(ClaudeStreamEvent.Complete(result.numTurns, result.costUsd))
+                }
+            }
+            is ClaudeCodeResult.Failure -> {
+                logger.warn(
+                    "Claude Code failed: {} (timed out: {})",
+                    result.error.take(100),
+                    result.timedOut
+                )
+                if (!streamOutput) {
+                    streamCallback?.invoke(ClaudeStreamEvent.Error(result.error))
+                }
+            }
+            is ClaudeCodeResult.Denied -> {
+                logger.warn(
+                    "Claude Code denied: {}",
+                    result.reason
+                )
+                streamCallback?.invoke(ClaudeStreamEvent.Error(result.reason))
+            }
         }
 
         return result
@@ -209,6 +247,7 @@ class ClaudeCodeExecutor(
      * @param sessionId optional session ID to resume a previous session
      * @param model optional model to use (e.g., "sonnet", "opus")
      * @param systemPrompt optional system prompt to prepend
+     * @param streamOutput if true, log Claude's output as it streams (uses stream-json format)
      * @return a [ClaudeCodeAsyncExecution] handle for monitoring and controlling the execution
      */
     fun executeAsync(
@@ -221,6 +260,7 @@ class ClaudeCodeExecutor(
         sessionId: String? = null,
         model: String? = null,
         systemPrompt: String? = null,
+        streamOutput: Boolean = false,
     ): ClaudeCodeAsyncExecution {
         // Check availability first
         checkAvailability()?.let {
@@ -235,13 +275,15 @@ class ClaudeCodeExecutor(
             sessionId = sessionId,
             model = model,
             systemPrompt = systemPrompt,
+            streamOutput = streamOutput,
         )
 
         logger.info(
-            "Executing Claude Code (async): \"{}\" (allowed tools: {}, max turns: {})",
+            "Executing Claude Code (async): \"{}\" (allowed tools: {}, max turns: {}{})",
             prompt.take(80),
             allowedTools?.size ?: "all",
-            maxTurns ?: "unlimited"
+            maxTurns ?: "unlimited",
+            if (streamOutput) ", streaming" else ""
         )
 
         return if (sandboxExecutor != null) {
@@ -323,6 +365,8 @@ class ClaudeCodeExecutor(
         command: List<String>,
         workingDirectory: Path?,
         timeout: Duration,
+        streamOutput: Boolean,
+        streamCallback: ((ClaudeStreamEvent) -> Unit)?,
     ): ClaudeCodeResult {
         val executor = sandboxExecutor ?: return ClaudeCodeResult.Denied("No sandbox executor configured")
 
@@ -333,8 +377,22 @@ class ClaudeCodeExecutor(
             timeout = timeout,
         )
 
+        // Note: Sandboxed execution doesn't support real-time streaming yet,
+        // but we still parse stream-json format if requested
         return when (val result = executor.execute(request)) {
-            is ExecutionResult.Completed -> parseOutput(result.stdout, result.exitCode, result.duration)
+            is ExecutionResult.Completed -> {
+                if (streamOutput) {
+                    // Process each line through the callback for post-hoc streaming
+                    if (streamCallback != null) {
+                        result.stdout.lines().forEach { line ->
+                            logStreamLine(line, streamCallback)
+                        }
+                    }
+                    parseStreamOutput(result.stdout, result.exitCode, result.duration)
+                } else {
+                    parseOutput(result.stdout, result.exitCode, result.duration)
+                }
+            }
             is ExecutionResult.TimedOut -> ClaudeCodeResult.Failure(
                 error = "Execution timed out after $timeout",
                 timedOut = true,
@@ -351,6 +409,8 @@ class ClaudeCodeExecutor(
         command: List<String>,
         workingDirectory: Path?,
         timeout: Duration,
+        streamOutput: Boolean,
+        streamCallback: ((ClaudeStreamEvent) -> Unit)?,
     ): ClaudeCodeResult {
         return try {
             val processBuilder = ProcessBuilder(command)
@@ -365,11 +425,18 @@ class ClaudeCodeExecutor(
             val process = processBuilder.start()
             process.outputStream.close()
 
-            var stdout = ""
+            val outputLines = mutableListOf<String>()
             var stderr = ""
 
             val stdoutThread = Thread {
-                stdout = process.inputStream.bufferedReader().readText()
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        outputLines.add(line)
+                        if (streamOutput) {
+                            logStreamLine(line, streamCallback)
+                        }
+                    }
+                }
             }.apply { start() }
 
             val stderrThread = Thread {
@@ -392,9 +459,135 @@ class ClaudeCodeExecutor(
             stdoutThread.join()
             stderrThread.join()
 
-            parseOutput(stdout, process.exitValue(), null)
+            val stdout = outputLines.joinToString("\n")
+            if (streamOutput) {
+                parseStreamOutput(stdout, process.exitValue(), null, stderr)
+            } else {
+                parseOutput(stdout, process.exitValue(), null, stderr)
+            }
         } catch (e: Exception) {
             ClaudeCodeResult.Failure(error = e.message ?: "Unknown error")
+        }
+    }
+
+    /**
+     * Log a single line from stream-json output and invoke the callback if provided.
+     */
+    private fun logStreamLine(line: String, callback: ((ClaudeStreamEvent) -> Unit)?) {
+        if (line.isBlank()) return
+
+        try {
+            val json = objectMapper.readTree(line)
+            val type = json.get("type")?.asText()
+
+            when (type) {
+                "assistant" -> {
+                    val message = json.get("message")?.get("content")
+                    if (message != null && message.isArray && message.size() > 0) {
+                        val text = message[0]?.get("text")?.asText()
+                        if (!text.isNullOrBlank()) {
+                            logger.info("[Claude] {}", text.take(200))
+                            callback?.invoke(ClaudeStreamEvent.Text(text))
+                        }
+                    }
+                }
+                "user" -> {
+                    val message = json.get("message")?.get("content")
+                    if (message != null && message.isArray && message.size() > 0) {
+                        val firstContent = message[0]
+                        val toolResult = firstContent?.get("tool_result")
+                        if (toolResult != null) {
+                            val toolName = toolResult.get("tool_use_id")?.asText() ?: "tool"
+                            logger.info("[Tool Result] {}", toolName)
+                            callback?.invoke(ClaudeStreamEvent.ToolResult(toolName))
+                        }
+                    }
+                }
+                "result" -> {
+                    val subtype = json.get("subtype")?.asText()
+                    if (subtype == "success") {
+                        val cost = json.get("total_cost_usd")?.asDouble() ?: 0.0
+                        val turns = json.get("num_turns")?.asInt() ?: 0
+                        logger.info("[Result] Completed: {} turns, cost \${}", turns, "%.4f".format(cost))
+                        callback?.invoke(ClaudeStreamEvent.Complete(turns, cost))
+                    } else if (subtype == "error") {
+                        val error = json.get("result")?.asText() ?: "Unknown error"
+                        logger.warn("[Result] Error: {}", error.take(100))
+                        callback?.invoke(ClaudeStreamEvent.Error(error))
+                    }
+                }
+                else -> {
+                    // Log other message types at debug level
+                    logger.debug("[Stream] type={}: {}", type, line.take(100))
+                }
+            }
+        } catch (e: Exception) {
+            logger.debug("Failed to parse stream line: {}", line.take(100))
+        }
+    }
+
+    /**
+     * Parse stream-json format output and extract the final result.
+     */
+    private fun parseStreamOutput(stdout: String, exitCode: Int, duration: Duration?, stderr: String = ""): ClaudeCodeResult {
+        if (stdout.isBlank()) {
+            val errorMsg = if (stderr.isNotBlank()) {
+                "Empty output from Claude Code. Stderr: ${stderr.take(500)}"
+            } else {
+                "Empty output from Claude Code"
+            }
+            logger.warn("Claude Code returned empty stdout. Exit code: {}, stderr: {}", exitCode, stderr.take(200))
+            return ClaudeCodeResult.Failure(
+                error = errorMsg,
+                exitCode = exitCode,
+                duration = duration,
+                stderr = stderr.takeIf { it.isNotBlank() },
+            )
+        }
+
+        // Find the last "result" line which contains the final outcome
+        val lines = stdout.lines().filter { it.isNotBlank() }
+        var lastResult: ClaudeCodeJsonOutput? = null
+        var sessionId: String? = null
+
+        for (line in lines) {
+            try {
+                val json = objectMapper.readTree(line)
+                val type = json.get("type")?.asText()
+
+                if (type == "result") {
+                    lastResult = objectMapper.treeToValue(json, ClaudeCodeJsonOutput::class.java)
+                }
+
+                // Capture session ID from any message that has it
+                json.get("session_id")?.asText()?.let { sessionId = it }
+            } catch (e: Exception) {
+                // Skip malformed lines
+            }
+        }
+
+        if (lastResult == null) {
+            return ClaudeCodeResult.Failure(
+                error = "No result message found in stream output",
+                exitCode = exitCode,
+                duration = duration,
+            )
+        }
+
+        return if (lastResult.isError == true || exitCode != 0) {
+            ClaudeCodeResult.Failure(
+                error = lastResult.result ?: "Unknown error",
+                exitCode = exitCode,
+                duration = duration,
+            )
+        } else {
+            ClaudeCodeResult.Success(
+                result = lastResult.result ?: "",
+                sessionId = sessionId ?: lastResult.sessionId,
+                costUsd = lastResult.totalCostUsd ?: lastResult.costUsd ?: 0.0,
+                duration = lastResult.durationMs?.milliseconds ?: duration,
+                numTurns = lastResult.numTurns ?: 0,
+            )
         }
     }
 
@@ -406,16 +599,34 @@ class ClaudeCodeExecutor(
         sessionId: String?,
         model: String?,
         systemPrompt: String?,
+        streamOutput: Boolean = false,
     ): List<String> {
+        // stream-json format requires --verbose flag when used with -p (print) mode
+        val outputFormat = if (streamOutput) "stream-json" else "json"
         val command = mutableListOf(
             claudeCommand,
             "-p", prompt,
-            "--output-format", "json",
+            "--output-format", outputFormat,
         )
 
-        if (permissionMode != ClaudeCodePermissionMode.DEFAULT) {
-            command.add("--permission-mode")
-            command.add(permissionMode.cliValue)
+        if (streamOutput) {
+            command.add("--verbose")
+        }
+
+        // Handle permission modes
+        when (permissionMode) {
+            ClaudeCodePermissionMode.DEFAULT -> {
+                // No additional flags needed
+            }
+            ClaudeCodePermissionMode.DANGEROUSLY_SKIP_PERMISSIONS -> {
+                // Use the dedicated flag for full YOLO mode
+                // Note: This ignores --permission-mode, so we don't add it
+                command.add("--dangerously-skip-permissions")
+            }
+            else -> {
+                command.add("--permission-mode")
+                command.add(permissionMode.cliValue)
+            }
         }
 
         if (allowedTools != null && allowedTools.isNotEmpty()) {
@@ -446,12 +657,19 @@ class ClaudeCodeExecutor(
         return command
     }
 
-    private fun parseOutput(stdout: String, exitCode: Int, duration: Duration?): ClaudeCodeResult {
+    private fun parseOutput(stdout: String, exitCode: Int, duration: Duration?, stderr: String = ""): ClaudeCodeResult {
         if (stdout.isBlank()) {
+            val errorMsg = if (stderr.isNotBlank()) {
+                "Empty output from Claude Code. Stderr: ${stderr.take(500)}"
+            } else {
+                "Empty output from Claude Code"
+            }
+            logger.warn("Claude Code returned empty stdout. Exit code: {}, stderr: {}", exitCode, stderr.take(200))
             return ClaudeCodeResult.Failure(
-                error = "Empty output from Claude Code",
+                error = errorMsg,
                 exitCode = exitCode,
                 duration = duration,
+                stderr = stderr.takeIf { it.isNotBlank() },
             )
         }
 

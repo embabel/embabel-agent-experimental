@@ -171,19 +171,55 @@ enum class ClaudeCodeAllowedTool(val cliName: String) {
  * Permission mode for Claude Code execution.
  *
  * Controls how Claude Code handles permission requests during execution.
+ *
+ * Note: For fully non-interactive automation, use [DANGEROUSLY_SKIP_PERMISSIONS]
+ * which passes `--dangerously-skip-permissions` to the CLI. This is separate from
+ * `--permission-mode` and is intended for use in isolated environments (Docker, CI/CD).
  */
 enum class ClaudeCodePermissionMode(val cliValue: String) {
     /** Default mode - prompts for permissions interactively (not suitable for automation) */
     DEFAULT("default"),
 
-    /** Accept all edit operations automatically */
+    /** Accept all edit operations automatically (may still prompt for bash commands) */
     ACCEPT_EDITS("acceptEdits"),
 
     /** Runs in plan mode only - no edits allowed */
     PLAN("plan"),
 
-    /** Bypass all permission prompts (use with caution!) */
+    /** Bypass all permission prompts via --permission-mode flag (use with caution!) */
     BYPASS_PERMISSIONS("bypassPermissions"),
+
+    /**
+     * Skip ALL permission checks via --dangerously-skip-permissions flag.
+     *
+     * This enables full "YOLO mode" for completely unattended execution.
+     * Intended ONLY for isolated environments (Docker containers, CI/CD) with
+     * appropriate safeguards (network isolation, git checkpoints, etc.).
+     *
+     * WARNING: This removes all safety guardrails. Claude can execute any operation
+     * including destructive commands, file deletions, or system modifications.
+     */
+    DANGEROUSLY_SKIP_PERMISSIONS("dangerouslySkipPermissions"),
+}
+
+/**
+ * Events emitted during streaming Claude Code execution.
+ *
+ * Use with the `streamCallback` parameter in [ClaudeCodeExecutor.execute] to
+ * receive real-time updates as Claude Code processes a task.
+ */
+sealed interface ClaudeStreamEvent {
+    /** Claude emitted text output */
+    data class Text(val text: String) : ClaudeStreamEvent
+
+    /** A tool completed execution */
+    data class ToolResult(val toolId: String) : ClaudeStreamEvent
+
+    /** Execution completed successfully */
+    data class Complete(val turns: Int, val costUsd: Double) : ClaudeStreamEvent
+
+    /** Execution encountered an error */
+    data class Error(val message: String) : ClaudeStreamEvent
 }
 
 /**

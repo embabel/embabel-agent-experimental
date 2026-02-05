@@ -89,6 +89,7 @@ data class Codebase(
  *
  * @param executor the Claude Code executor to use
  * @param defaultMaxTurns default maximum turns for executions
+ * @param streamOutput if true, log Claude's output as it streams
  */
 @Agent(
     description = "Implements features and fixes bugs using Claude Code",
@@ -97,6 +98,8 @@ data class Codebase(
 class CodeImplementationAgent(
     private val executor: ClaudeCodeExecutor = ClaudeCodeExecutor(),
     private val defaultMaxTurns: Int = 30,
+    private val streamOutput: Boolean = false,
+    private val streamCallback: ((ClaudeStreamEvent) -> Unit)? = null,
 ) {
 
     /**
@@ -123,6 +126,8 @@ class CodeImplementationAgent(
                 ClaudeCodeAllowedTool.GREP,
             ),
             maxTurns = defaultMaxTurns,
+            streamOutput = streamOutput,
+            streamCallback = streamCallback,
         )
 
         return when (result) {
@@ -168,6 +173,8 @@ class CodeImplementationAgent(
                 ClaudeCodeAllowedTool.GREP,
             ),
             maxTurns = defaultMaxTurns,
+            streamOutput = streamOutput,
+            streamCallback = streamCallback,
         )
 
         return when (result) {
@@ -214,6 +221,8 @@ class CodeImplementationAgent(
                 ClaudeCodeAllowedTool.GREP,
             ),
             maxTurns = defaultMaxTurns,
+            streamOutput = streamOutput,
+            streamCallback = streamCallback,
         )
 
         return when (result) {
@@ -259,6 +268,8 @@ class CodeImplementationAgent(
                 ClaudeCodeAllowedTool.GREP,
             ),
             maxTurns = defaultMaxTurns,
+            streamOutput = streamOutput,
+            streamCallback = streamCallback,
         )
 
         return when (result) {
