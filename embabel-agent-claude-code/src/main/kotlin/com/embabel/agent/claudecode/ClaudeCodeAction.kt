@@ -291,6 +291,136 @@ class CodeImplementationAgent(
         }
     }
 
+    /**
+     * Continue a previous Claude Code session with a new prompt.
+     * Useful for multi-step workflows like: fix bug -> create PR.
+     *
+     * @param sessionId the session ID from a previous execution
+     * @param prompt the new instruction for Claude
+     * @param codebase the codebase context
+     * @param additionalTools additional tools to allow beyond the defaults
+     */
+    @Action(
+        description = "Continue a Claude Code session with a new instruction",
+    )
+    fun continueSession(
+        sessionId: String,
+        prompt: String,
+        codebase: Codebase,
+        additionalTools: List<ClaudeCodeAllowedTool> = emptyList(),
+    ): ImplementationOutcome {
+        val allTools = listOf(
+            ClaudeCodeAllowedTool.READ,
+            ClaudeCodeAllowedTool.EDIT,
+            ClaudeCodeAllowedTool.WRITE,
+            ClaudeCodeAllowedTool.BASH,
+            ClaudeCodeAllowedTool.GLOB,
+            ClaudeCodeAllowedTool.GREP,
+        ) + additionalTools
+
+        val result = executor.execute(
+            prompt = prompt,
+            workingDirectory = codebase.path,
+            allowedTools = allTools.distinct(),
+            maxTurns = defaultMaxTurns,
+            streamOutput = streamOutput,
+            streamCallback = streamCallback,
+            sessionId = sessionId,
+        )
+
+        return when (result) {
+            is ClaudeCodeResult.Success -> ImplementationOutcome(
+                success = true,
+                summary = result.result,
+                filesChanged = result.allAffectedFiles,
+                sessionId = result.sessionId,
+                costUsd = result.costUsd,
+            )
+            is ClaudeCodeResult.Failure -> ImplementationOutcome(
+                success = false,
+                summary = "Continuation failed: ${result.error}",
+            )
+            is ClaudeCodeResult.Denied -> ImplementationOutcome(
+                success = false,
+                summary = "Continuation denied: ${result.reason}",
+            )
+        }
+    }
+
+    /**
+     * Create a pull request for changes made in a previous session.
+     * This continues an existing session and instructs Claude to create a PR.
+     *
+     * @param sessionId the session ID from a previous execution (e.g., from fixBug)
+     * @param codebase the codebase context
+     * @param issueNumber optional issue number to reference in the PR
+     * @param baseBranch the base branch for the PR (default: main)
+     * @param branchName optional branch name (Claude will create one if not specified)
+     */
+    @Action(
+        description = "Create a pull request using Claude Code",
+    )
+    fun createPullRequest(
+        sessionId: String,
+        codebase: Codebase,
+        issueNumber: Int? = null,
+        baseBranch: String = "main",
+        branchName: String? = null,
+    ): ImplementationOutcome {
+        val prompt = buildString {
+            appendLine("Create a pull request for the changes you just made.")
+            appendLine()
+            if (branchName != null) {
+                appendLine("Use branch name: $branchName")
+            } else {
+                appendLine("Create an appropriate branch name based on the changes.")
+            }
+            appendLine("Base branch: $baseBranch")
+            if (issueNumber != null) {
+                appendLine("This fixes issue #$issueNumber - reference it in the PR.")
+            }
+            appendLine()
+            appendLine("Steps:")
+            appendLine("1. Create and checkout a new branch")
+            appendLine("2. Stage and commit all changes with a descriptive message")
+            appendLine("3. Push the branch to origin")
+            appendLine("4. Create a PR using 'gh pr create'")
+            appendLine()
+            appendLine("Return the PR URL when done.")
+        }
+
+        val result = executor.execute(
+            prompt = prompt,
+            workingDirectory = codebase.path,
+            allowedTools = listOf(
+                ClaudeCodeAllowedTool.READ,
+                ClaudeCodeAllowedTool.BASH, // Needed for git and gh commands
+            ),
+            maxTurns = defaultMaxTurns,
+            streamOutput = streamOutput,
+            streamCallback = streamCallback,
+            sessionId = sessionId,
+        )
+
+        return when (result) {
+            is ClaudeCodeResult.Success -> ImplementationOutcome(
+                success = true,
+                summary = result.result,
+                filesChanged = result.allAffectedFiles,
+                sessionId = result.sessionId,
+                costUsd = result.costUsd,
+            )
+            is ClaudeCodeResult.Failure -> ImplementationOutcome(
+                success = false,
+                summary = "PR creation failed: ${result.error}",
+            )
+            is ClaudeCodeResult.Denied -> ImplementationOutcome(
+                success = false,
+                summary = "PR creation denied: ${result.reason}",
+            )
+        }
+    }
+
     private fun buildImplementationPrompt(spec: FeatureSpecification, codebase: Codebase): String {
         return buildString {
             appendLine("Implement the following feature:")
