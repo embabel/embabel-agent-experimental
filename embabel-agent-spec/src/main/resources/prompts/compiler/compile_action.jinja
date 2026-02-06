@@ -1,0 +1,29 @@
+Create an action definition, given the following description:
+
+{{ actionSpecification.description }}
+
+Domain types are important to coordinate actions.
+You can choose from the following domain types:
+{% for binding in bindings %}
+    - type {{ binding.name }}, varname={{ binding.varname }}, description= {{ binding.description }}
+    properties:
+    {% for property in binding.domainType.properties %}
+        - {{ property.name }}: {{ property.description }}
+    {% endfor %}
+    ---------------------
+{% endfor %}
+
+The action should have a single output type, but can have one or more input types.
+
+Your key responsibility is to create a prompt. The prompt will be in Jinja template format,
+and may reference the inputs by varnames corresponding to the correct input type.
+
+{% if toolGroups is not empty %}
+You can choose tool groups from the following available tool groups:
+{% for toolGroup in toolGroups %}
+    - {{ toolGroup.role }}: {{ toolGroup.description }}
+{% endfor %}
+{% endif %}
+
+The action name should be "{{ actionSpecification.name }}".
+The stepType must be "action"

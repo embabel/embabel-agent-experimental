@@ -1,0 +1,13 @@
+Create a goal definition, given the following description:
+
+{{ goalSpecification.description }}
+
+You need to determine the domain type that best represents the goal.
+
+You can choose from the following domain types:
+{% for binding in bindings %}
+    - type {{ binding.name }}, varname={{ binding.varname }}, description= {{ binding.description }}
+{% endfor %}
+
+The goal name should be "{{ goalSpecification.name }}".
+The stepType must be "goal"
