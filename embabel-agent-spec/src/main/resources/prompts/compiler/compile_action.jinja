@@ -18,7 +18,7 @@ The action should have a single output type, but can have one or more input type
 Your key responsibility is to create a prompt. The prompt will be in Jinja template format,
 and may reference the inputs by varnames corresponding to the correct input type.
 
-{% if toolGroups is not empty %}
+{% if toolGroups | length > 0 %}
 You can choose tool groups from the following available tool groups:
 {% for toolGroup in toolGroups %}
     - {{ toolGroup.role }}: {{ toolGroup.description }}
