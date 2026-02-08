@@ -16,7 +16,7 @@
 package com.embabel.agent.skills
 
 import com.embabel.agent.api.annotation.LlmTool
-import com.embabel.agent.api.common.LlmReference
+import com.embabel.agent.api.reference.LlmReference
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.skills.script.NoOpExecutionEngine
 import com.embabel.agent.skills.script.SkillScriptExecutionEngine

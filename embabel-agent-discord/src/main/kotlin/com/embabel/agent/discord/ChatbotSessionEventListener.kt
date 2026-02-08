@@ -86,7 +86,6 @@ class ChatbotSessionEventListener(
                 outputChannel = ChannelRespondingOutputChannel(
                     channel = event.channel,
                 ),
-                systemMessage = null,
             )
         } as ChatSession
     }
