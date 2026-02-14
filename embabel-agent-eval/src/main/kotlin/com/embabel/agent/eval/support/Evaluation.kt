@@ -55,10 +55,11 @@ data class Task(
 )
 
 /**
- * Configuration for evaluating a conversation
+ * Configuration for evaluating a conversation.
+ * @param seeds data to prime agent memory before evaluation begins
  * @param evaluator the evaluator
  * @param tasks the tasks to perform
- * @param facts the facts to provide in response to questions
+ * @param facts ground truth facts for scoring
  * @param maxTurns the maximum number of turns in the conversation. Safeguard
  * @param assertions assertions to make after the conversation is done
  */
@@ -69,6 +70,7 @@ data class EvaluationJob(
     val scorer: Scorer = Scorer(),
     val maxTurns: Int = 20,
     val greetings: List<String> = listOf("Hello", "Hi", "Greetings", "Yo", "Hey"),
+    val seeds: List<Seed> = emptyList(),
     val setups: List<Setup> = emptyList(),
     val tasks: List<Task>,
     val facts: List<String>,

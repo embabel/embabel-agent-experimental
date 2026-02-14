@@ -20,11 +20,7 @@ import com.embabel.agent.eval.assert.AssertionEvaluator
 import com.embabel.agent.eval.client.*
 import com.embabel.agent.eval.support.*
 import com.embabel.common.textio.template.TemplateRenderer
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.client.ChatClient
-import org.springframework.ai.chat.client.entity
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.ai.chat.prompt.ChatOptions
 import org.springframework.ai.chat.prompt.Prompt
@@ -32,17 +28,6 @@ import org.springframework.retry.RetryCallback
 import org.springframework.retry.RetryContext
 import org.springframework.retry.RetryListener
 import org.springframework.retry.support.RetryTemplateBuilder
-
-
-private val SCORES_EXAMPLE = SubjectiveScores(
-    tone = 0.5,
-    tasks = listOf(
-        Score("What is the capital of France?", 0.9),
-        Score("Who was the first President of France", 0.4),
-        Score("Tell me a joke", 0.7),
-        Score("Tell me a story in 50 words", 0.6),
-    ),
-)
 
 class DefaultEvaluationRunner(
     private val evaluatorChatModel: ChatModel,
@@ -54,6 +39,7 @@ class DefaultEvaluationRunner(
 ) : EvaluationRunner {
 
     private val logger = LoggerFactory.getLogger(DefaultEvaluationRunner::class.java)
+    private val transcriptScorer = TranscriptScorer(scoringChatModel, templateRenderer)
 
     override fun evaluateConversation(
         evaluationJob: EvaluationJob,
@@ -129,7 +115,7 @@ class DefaultEvaluationRunner(
                 val assertionScores = evaluationJob.assertions.map {
                     assertionEvaluator.evaluate(evaluationInProgress = evaluationInProgress, assertion = it)
                 }
-                val subjectiveScores = scoreTranscript(evaluationInProgress)
+                val subjectiveScores = transcriptScorer.scoreTranscript(evaluationInProgress)
                 val evaluationResult = EvaluationResult(
                     job = if (supplyFacts) evaluationJob else evaluationJob.copy(facts = emptyList()),
                     subjectiveScores = subjectiveScores,
@@ -167,7 +153,7 @@ class DefaultEvaluationRunner(
         return EvaluationResult(
             job = evaluationJob,
             aborted = true,
-            subjectiveScores = scoreTranscript(evaluationInProgress),
+            subjectiveScores = transcriptScorer.scoreTranscript(evaluationInProgress),
             assertionScores = assertionScores,
             transcript = evaluationInProgress.transcript,
             failureCount = evaluationInProgress.failureCount,
@@ -220,28 +206,6 @@ class DefaultEvaluationRunner(
         return reply
     }
 
-    private fun scoreTranscript(
-        evaluationRun: EvaluationRun,
-    ): SubjectiveScores {
-        val scoringChatOptions = ChatOptions.builder()
-            .temperature(evaluationRun.job.scorer.temperature)
-            .build()
-        val prompt = templateRenderer.renderLoadedTemplate(
-            evaluationRun.job.scorer.prompt,
-            mapOf(
-                "config" to evaluationRun.job,
-                "transcript" to evaluationRun.transcript,
-                "example" to jacksonObjectMapper().registerModule(JavaTimeModule()).writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(SCORES_EXAMPLE),
-            )
-        )
-        val chatClient = ChatClient
-            .builder(scoringChatModel)
-            .defaultOptions(scoringChatOptions)
-            .build()
-        return chatClient.prompt(prompt).call()
-            .entity<SubjectiveScores>()
-    }
 }
 
 fun <T> time(block: () -> T): Pair<T, Long> {
