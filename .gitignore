@@ -39,5 +39,8 @@ build.log
 hs_err_pid*
 replay_pid*
 
+# Flatten Maven Plugin
+.flattened-pom.xml
+
 # Personal documentation
 my-doc/

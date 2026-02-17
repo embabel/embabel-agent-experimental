@@ -9,8 +9,12 @@
     </parent>
     <groupId>com.embabel.agent</groupId>
     <artifactId>embabel-agent-experimental-bom</artifactId>
-    <version>0.3.4-SNAPSHOT</version>
+    <version>${revision}</version>
     <packaging>pom</packaging>
+
+    <properties>
+        <revision>0.3.5-SNAPSHOT</revision>
+    </properties>
     <name>Embabel Agent Experimental BOM</name>
     <description>Embabel Agent Experimental BOM</description>
     <url>https://github.com/embabel/embabel-agent-experimental</url>

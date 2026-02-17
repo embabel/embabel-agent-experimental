@@ -4,7 +4,7 @@
     <parent>
         <groupId>com.embabel.agent</groupId>
         <artifactId>embabel-agent-experimental</artifactId>
-        <version>0.3.4-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
     <artifactId>embabel-agent-claude-code</artifactId>
     <packaging>jar</packaging>
