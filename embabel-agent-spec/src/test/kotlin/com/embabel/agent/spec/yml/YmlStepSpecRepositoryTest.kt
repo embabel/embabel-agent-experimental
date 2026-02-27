@@ -305,6 +305,8 @@ class YmlStepSpecRepositoryTest {
                 description = "Round trip test",
                 inputTypeNames = setOf("TypeA", "TypeB"),
                 outputTypeName = "ResultType",
+                pre = listOf("#typeA != null"),
+                post = listOf("#resultType.valid"),
                 prompt = "Process {{typeA}} and {{typeB}}",
                 toolGroups = listOf("search", "web"),
                 nullable = true,
@@ -319,6 +321,8 @@ class YmlStepSpecRepositoryTest {
             assertEquals(original.description, loaded.description)
             assertEquals(original.inputTypeNames, loaded.inputTypeNames)
             assertEquals(original.outputTypeName, loaded.outputTypeName)
+            assertEquals(original.pre, loaded.pre)
+            assertEquals(original.post, loaded.post)
             assertEquals(original.prompt, loaded.prompt)
             assertEquals(original.toolGroups, loaded.toolGroups)
             assertEquals(original.nullable, loaded.nullable)

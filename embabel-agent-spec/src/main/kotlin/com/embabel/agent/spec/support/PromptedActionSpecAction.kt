@@ -29,8 +29,6 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 internal open class PromptedActionSpecAction(
     val spec: PromptedActionSpec,
     inputs: Set<IoBinding>,
-    pre: List<String>,
-    post: List<String>,
     qos: ActionQos = ActionQos(),
     private val outputVarName: String = spec.outputTypeName.decapitalize(),
     toolGroups: Set<ToolGroupRequirement> = spec.toolGroups.map {
@@ -40,8 +38,8 @@ internal open class PromptedActionSpecAction(
 ) : AbstractAction(
     name = spec.name,
     description = spec.description,
-    pre = pre,
-    post = post,
+    pre = spec.pre,
+    post = spec.post,
     cost = { spec.cost },
     value = { spec.value },
     canRerun = spec.canRerun,

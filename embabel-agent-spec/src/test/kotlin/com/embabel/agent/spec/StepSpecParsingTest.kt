@@ -75,6 +75,32 @@ class StepSpecParsingTest {
         }
 
         @Test
+        fun `parse simple action has empty pre and post by default`() {
+            val yaml = loadYamlResource("yml/simple-action.yml")
+
+            val result = yamlMapper.readValue(yaml, StepSpec::class.java)
+
+            val action = result as PromptedActionSpec
+            assertTrue(action.pre.isEmpty())
+            assertTrue(action.post.isEmpty())
+        }
+
+        @Test
+        fun `parse action with pre and post conditions from yaml`() {
+            val yaml = loadYamlResource("yml/action-with-conditions.yml")
+
+            val result = yamlMapper.readValue(yaml, StepSpec::class.java)
+
+            assertInstanceOf(PromptedActionSpec::class.java, result)
+            val action = result as PromptedActionSpec
+            assertEquals("validateOrder", action.name)
+            assertEquals(setOf("Order"), action.inputTypeNames)
+            assertEquals("ValidatedOrder", action.outputTypeName)
+            assertEquals(listOf("#order.total > 0", "#order.items.size() > 0"), action.pre)
+            assertEquals(listOf("#validatedOrder.status == 'validated'"), action.post)
+        }
+
+        @Test
         fun `parse multi-input action from yaml`() {
             val yaml = loadYamlResource("yml/multi-input-action.yml")
 

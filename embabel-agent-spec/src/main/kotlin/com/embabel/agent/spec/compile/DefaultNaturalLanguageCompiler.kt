@@ -53,9 +53,21 @@ internal data class CompiledAction(
     val outputTypeName: String,
 
     @param:JsonPropertyDescription(
-        "Jinja2/Mustache template prompt that will be rendered at runtime. " +
+        "SpEL preconditions that gate execution. If the description says 'when X is Y' or 'if X', " +
+        "extract it here as 'spel:varname.property.contains(value)' or similar. " +
+        "Do NOT duplicate this condition as a Jinja if/else in the prompt."
+    )
+    val pre: List<String> = emptyList(),
+
+    @param:JsonPropertyDescription("Postcondition strings: what must be true after execution. Can use SpEL")
+    val post: List<String> = emptyList(),
+
+    @param:JsonPropertyDescription(
+        "Jinja2/Mustache template prompt rendered at runtime. " +
         "Use {{variableName}} syntax to reference input values. " +
-        "Variable names are the type names with first letter lowercased (e.g., UserInput -> userInput)."
+        "Variable names are the type names with first letter lowercased (e.g., UserInput -> userInput). " +
+        "NEVER use Jinja {% if %} blocks for conditions that belong in 'pre'. " +
+        "Assume preconditions are already satisfied."
     )
     val prompt: String,
 
@@ -130,6 +142,8 @@ class DefaultNaturalLanguageCompiler(
                 description = compiled.description,
                 inputTypeNames = compiled.inputTypeNames,
                 outputTypeName = compiled.outputTypeName,
+                pre = compiled.pre,
+                post = compiled.post,
                 prompt = compiled.prompt,
                 toolGroups = compiled.toolGroups,
                 nullable = compiled.nullable,
@@ -137,10 +151,11 @@ class DefaultNaturalLanguageCompiler(
             )
 
             logger.info(
-                "Successfully compiled action '{}': inputs={}, output={}, tools={}",
+                "Successfully compiled action '{}': inputs={}, output={}, pre={}, tools={}",
                 actionSpec.name,
                 actionSpec.inputTypeNames,
                 actionSpec.outputTypeName,
+                actionSpec.pre,
                 actionSpec.toolGroups,
             )
 

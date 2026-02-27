@@ -1,0 +1,12 @@
+stepType: action
+name: validateOrder
+description: Validate an order before processing
+inputTypeNames:
+  - Order
+outputTypeName: ValidatedOrder
+pre:
+  - "#order.total > 0"
+  - "#order.items.size() > 0"
+post:
+  - "#validatedOrder.status == 'validated'"
+prompt: "Validate the following order: {{order}}"

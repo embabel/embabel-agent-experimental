@@ -18,6 +18,33 @@ The action should have a single output type, but can have one or more input type
 Your key responsibility is to create a prompt. The prompt will be in Jinja template format,
 and may reference the inputs by varnames corresponding to the correct input type.
 
+## Preconditions (pre) — IMPORTANT, DO THIS FIRST
+
+Before writing the prompt, check: does the description contain a filter condition like
+"when X", "if Y", "only when Z"? If so, you MUST extract it as a SpEL precondition in the `pre` list.
+This prevents the action from running at all when the condition is not met, avoiding a wasted LLM call.
+
+Format: `"spel:varname.property operator value"`
+Examples:
+- `"spel:email.sender.contains('Richard Beck')"` — sender contains a name
+- `"spel:order.total > 100"` — numeric comparison
+- `"spel:gitHubIssueEvent.ghIssue.state.name() == 'OPEN'"` — enum check
+
+Rules:
+- Use the varname from the domain type binding (e.g., `email`, `order`, `blackmawUser`)
+- Only generate preconditions for checks that can be evaluated on object properties without AI
+- When you extract a precondition, the prompt MUST NOT contain that same condition as a Jinja if/else block.
+  The precondition already gates execution, so the prompt should assume the condition is true.
+- Leave `pre` empty ONLY if there is no clear filter condition, or if the condition requires AI judgment
+{% raw %}
+WRONG — do not do this:
+  pre: []
+  prompt: "{% if email.sender == 'Richard Beck' %}...{% endif %}"
+CORRECT:
+  pre: ["spel:email.sender.contains('Richard Beck')"]
+  prompt: "Send a telegram notification..."
+{% endraw %}
+
 {% if toolGroups | length > 0 %}
 You can choose tool groups from the following available tool groups:
 {% for toolGroup in toolGroups %}

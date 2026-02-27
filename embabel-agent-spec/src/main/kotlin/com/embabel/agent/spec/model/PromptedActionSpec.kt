@@ -36,6 +36,8 @@ data class PromptedActionSpec(
     val llm: LlmOptions = LlmOptions(),
     val inputTypeNames: Set<String>,
     val outputTypeName: String,
+    val pre: List<String> = emptyList(),
+    val post: List<String> = emptyList(),
     val cost: ZeroToOne = 0.0,
     val value: ZeroToOne = 0.0,
     val canRerun: Boolean = false,
@@ -51,8 +53,6 @@ data class PromptedActionSpec(
         return PromptedActionSpecAction(
             spec = this,
             inputs = inputs,
-            pre = emptyList(),
-            post = emptyList(),
             outputVarName = variableNameFor(outputTypeName),
             toolGroups = toolGroups.map { ToolGroupRequirement(it) }.toSet(),
             domainTypes = stepContext.dataDictionary.domainTypes,
