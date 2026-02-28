@@ -58,6 +58,11 @@ internal open class PromptedActionSpecAction(
     override fun execute(
         processContext: ProcessContext,
     ): ActionStatus = ActionRunner.execute(processContext) {
+        if (spec.outputTypeName == "void") {
+            val result = callLlmUntyped(processContext)
+            processContext.blackboard[outputVarName] = result
+            return@execute
+        }
         val domainTypes = this.domainTypes
         val resolved = domainTypes.find { it.name == spec.outputTypeName }
             ?: resolveJvmOutputType(spec.outputTypeName)
@@ -85,6 +90,23 @@ internal open class PromptedActionSpecAction(
         } catch (e: ClassNotFoundException) {
             null
         }
+    }
+
+    private fun callLlmUntyped(processContext: ProcessContext): String {
+        val context = OperationContext(
+            processContext = processContext,
+            operation = this,
+            toolGroups = toolGroups,
+        )
+        val templateModel = templateModel(processContext)
+        logger.info("Input map for void action name {}: {}", name, templateModel)
+        val prompt = context.agentPlatform().platformServices.templateRenderer
+            .renderLiteralTemplate(spec.prompt, templateModel)
+        return context.ai()
+            .withLlm(spec.llm)
+            .withId("action:${name}")
+            .withToolGroups(toolGroups.map { it.role }.toSet())
+            .generateText(prompt = prompt)
     }
 
     private fun callLlmWithJvmType(

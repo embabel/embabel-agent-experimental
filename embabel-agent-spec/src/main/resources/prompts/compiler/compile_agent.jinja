@@ -5,7 +5,15 @@ Description: {{ agentDescription }}
 
 ## Available Domain Types
 
-These are the existing types you can use as inputs and outputs:
+These are the existing types in the platform. They can be used as action inputs and outputs.
+**IMPORTANT**: Some existing types are consumed by existing platform actions. When you output one of these types,
+the platform will automatically chain your action into the existing action that handles it.
+For example, if a type represents a notification or message, outputting it will trigger the platform to deliver it.
+
+**Always prefer using an existing domain type as your action's output over using `void`**.
+Only use `void` when the action's side effects are handled entirely by tool calls within the prompt,
+and no existing type captures the result.
+
 {% for binding in bindings %}
     - type {{ binding.name }}, varname={{ binding.varname }}, description= {{ binding.description }}
     properties:
@@ -23,8 +31,9 @@ Each intermediate type needs:
 - A description
 - A list of properties, each with a name (camelCase), type ("string", "number", "boolean", or "integer"), and description
 
-Only define intermediate types when the task genuinely requires chaining.
+Only define intermediate types when the task genuinely requires chaining AND no existing type fits.
 For simple tasks, use only existing types and a single action.
+**Never define a new intermediate type that duplicates an existing domain type.**
 
 ## Actions
 
@@ -32,6 +41,9 @@ Define one or more actions that form a chain:
 - Each action has input types, an output type, and a Jinja2 prompt template
 - For chained actions: the output of action N should be usable as input to action N+1
 - Input and output types can be existing domain types OR newly defined intermediate types
+- **The final action's output type is critical**: if it matches an existing domain type, the platform
+  will automatically invoke existing actions that consume that type. Use this to connect to
+  platform capabilities (e.g., outputting a message type to trigger delivery).
 - Variable names are the type name with first letter lowercased (e.g., ResearchResults -> researchResults)
 
 Use {{variableName}} syntax in prompts to reference inputs.
