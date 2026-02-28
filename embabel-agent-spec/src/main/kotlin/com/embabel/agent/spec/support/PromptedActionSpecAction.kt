@@ -60,6 +60,7 @@ internal open class PromptedActionSpecAction(
     ): ActionStatus = ActionRunner.execute(processContext) {
         val domainTypes = this.domainTypes
         val resolved = domainTypes.find { it.name == spec.outputTypeName }
+            ?: resolveJvmOutputType(spec.outputTypeName)
             ?: throw IllegalArgumentException("Output type '${spec.outputTypeName}' not found in agent schema types.")
         val output = when (resolved) {
             is JvmType -> {
@@ -71,6 +72,19 @@ internal open class PromptedActionSpecAction(
             }
         }
         processContext.blackboard[outputVarName] = output
+    }
+
+    /**
+     * Try to resolve the output type as a JVM class on the classpath.
+     * Falls back to this when the type isn't in the action's domainTypes
+     * (e.g., when loaded from YAML before the platform is fully initialized).
+     */
+    private fun resolveJvmOutputType(typeName: String): JvmType? {
+        return try {
+            JvmType(Class.forName(typeName))
+        } catch (e: ClassNotFoundException) {
+            null
+        }
     }
 
     private fun callLlmWithJvmType(
