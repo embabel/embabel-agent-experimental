@@ -1,0 +1,67 @@
+Create a complete agent definition that decomposes the following task into one or more chained actions.
+
+Agent name: {{ agentName }}
+Description: {{ agentDescription }}
+
+## Available Domain Types
+
+These are the existing types you can use as inputs and outputs:
+{% for binding in bindings %}
+    - type {{ binding.name }}, varname={{ binding.varname }}, description= {{ binding.description }}
+    properties:
+    {% for property in binding.domainType.properties %}
+        - {{ property.name }}: {{ property.description }}
+    {% endfor %}
+    ---------------------
+{% endfor %}
+
+## Intermediate Types
+
+If the task requires multiple steps, you may define NEW intermediate types to pass data between actions.
+Each intermediate type needs:
+- A PascalCase name (must NOT clash with existing domain types listed above)
+- A description
+- A list of properties, each with a name (camelCase), type ("string", "number", "boolean", or "integer"), and description
+
+Only define intermediate types when the task genuinely requires chaining.
+For simple tasks, use only existing types and a single action.
+
+## Actions
+
+Define one or more actions that form a chain:
+- Each action has input types, an output type, and a Jinja2 prompt template
+- For chained actions: the output of action N should be usable as input to action N+1
+- Input and output types can be existing domain types OR newly defined intermediate types
+- Variable names are the type name with first letter lowercased (e.g., ResearchResults -> researchResults)
+
+Use {{variableName}} syntax in prompts to reference inputs.
+
+## Preconditions (pre) — IMPORTANT
+
+Before writing each prompt, check: does the description contain a filter condition like
+"when X", "if Y", "only when Z"? If so, extract it as a SpEL precondition in the `pre` list.
+
+Format: `"spel:varname.property operator value"`
+Examples:
+- `"spel:email.sender.contains('Richard Beck')"` — sender contains a name
+- `"spel:order.total > 100"` — numeric comparison
+
+Rules:
+- Use the varname from the domain type binding
+- Only generate preconditions for checks evaluable on object properties without AI
+- When you extract a precondition, the prompt MUST NOT duplicate it as a Jinja if/else block
+- Leave `pre` empty if there is no clear filter condition
+
+{% if toolGroups | length > 0 %}
+## Tool Groups
+
+You can assign tool groups from the following available groups:
+{% for toolGroup in toolGroups %}
+    - {{ toolGroup.role }}: {{ toolGroup.description }}
+{% endfor %}
+{% endif %}
+
+## Goal Description
+
+Provide a goalDescription: a sentence describing what it means for the agent to have completed its task.
+This should reference the final output type's meaning.

@@ -17,6 +17,8 @@ package com.embabel.agent.spec.compile
 
 import com.embabel.agent.api.common.Ai
 import com.embabel.agent.core.DomainType
+import com.embabel.agent.core.DynamicType
+import com.embabel.agent.core.ValuePropertyDefinition
 import com.embabel.agent.spec.model.GoalSpec
 import com.embabel.agent.spec.model.PromptedActionSpec
 import com.embabel.agent.spec.model.StepSpecContext
@@ -79,6 +81,54 @@ internal data class CompiledAction(
 
     @param:JsonPropertyDescription("Must be 'action'")
     val stepType: String = "action",
+)
+
+internal data class CompiledTypeProperty(
+    @param:JsonPropertyDescription("Property name in camelCase")
+    val name: String,
+    @param:JsonPropertyDescription("Property type: string, number, boolean, or integer")
+    val type: String = "string",
+    @param:JsonPropertyDescription("Brief description of the property")
+    val description: String = name,
+)
+
+internal data class CompiledTypeDefinition(
+    @param:JsonPropertyDescription("Type name in PascalCase, must not clash with existing domain types")
+    val name: String,
+    @param:JsonPropertyDescription("Brief description of what this type represents")
+    val description: String,
+    @param:JsonPropertyDescription("Properties of the type")
+    val properties: List<CompiledTypeProperty> = emptyList(),
+)
+
+internal data class CompiledChainAction(
+    @param:JsonPropertyDescription("Unique name for the action, in camelCase")
+    val name: String,
+    @param:JsonPropertyDescription("Brief description of what the action does")
+    val description: String,
+    @param:JsonPropertyDescription("Set of input type names from available or newly defined types")
+    val inputTypeNames: Set<String>,
+    @param:JsonPropertyDescription("Output type name from available or newly defined types")
+    val outputTypeName: String,
+    @param:JsonPropertyDescription("SpEL preconditions that gate execution")
+    val pre: List<String> = emptyList(),
+    @param:JsonPropertyDescription("Postcondition strings")
+    val post: List<String> = emptyList(),
+    @param:JsonPropertyDescription("Jinja2 template prompt using {{variableName}} syntax")
+    val prompt: String,
+    @param:JsonPropertyDescription("Tool group roles needed by this action")
+    val toolGroups: List<String> = emptyList(),
+    @param:JsonPropertyDescription("Whether the output can be null, triggering replanning")
+    val nullable: Boolean = false,
+)
+
+internal data class CompiledAgent(
+    @param:JsonPropertyDescription("New intermediate types to define for chaining actions")
+    val intermediateTypes: List<CompiledTypeDefinition> = emptyList(),
+    @param:JsonPropertyDescription("Ordered list of actions forming the agent's chain")
+    val actions: List<CompiledChainAction>,
+    @param:JsonPropertyDescription("Description of what achieving the final output means")
+    val goalDescription: String,
 )
 
 /**
@@ -213,4 +263,160 @@ class DefaultNaturalLanguageCompiler(
             )
         }
     }
+
+    override fun compileAgent(
+        name: String,
+        description: String,
+        context: StepSpecContext,
+    ): AgentCompilationResult {
+        logger.info("Compiling agent '{}' from natural language", name)
+        return try {
+            val bindings = context.dataDictionary.domainTypes.map { DomainTypeBinding(it) }
+            val existingTypeNames = context.dataDictionary.domainTypes.map { it.name }.toSet()
+            val compiled = ai
+                .withLlm(llmOptions)
+                .withId("compile-agent:$name")
+                .rendering("compiler/compile_agent")
+                .createObject(
+                    CompiledAgent::class.java,
+                    mapOf(
+                        "agentName" to name,
+                        "agentDescription" to description,
+                        "bindings" to bindings,
+                        "toolGroups" to context.toolGroups,
+                    ),
+                )
+            val resolved = resolveShortTypeNames(compiled, existingTypeNames)
+            val errors = mutableListOf<CompilationError>()
+            validateTypeClashes(resolved, existingTypeNames, errors)
+            if (errors.isNotEmpty()) {
+                return AgentCompilationResult(
+                    actions = emptyList(),
+                    goal = null,
+                    intermediateTypes = emptyList(),
+                    errors = errors,
+                )
+            }
+            val allTypes = inferMissingIntermediateTypes(resolved, existingTypeNames)
+            val intermediateTypes = allTypes.map { it.toDynamicType() }
+            val actions = resolved.actions.map { it.toPromptedActionSpec() }
+            val lastAction = resolved.actions.last()
+            val goal = GoalSpec(
+                name = "${name}-goal",
+                description = compiled.goalDescription,
+                outputTypeName = lastAction.outputTypeName,
+            )
+            logger.info(
+                "Successfully compiled agent '{}': {} actions, {} intermediate types",
+                name,
+                actions.size,
+                intermediateTypes.size,
+            )
+            AgentCompilationResult(
+                actions = actions,
+                goal = goal,
+                intermediateTypes = intermediateTypes,
+            )
+        } catch (e: Exception) {
+            logger.error("Failed to compile agent '{}': {}", name, e.message, e)
+            AgentCompilationResult(
+                actions = emptyList(),
+                goal = null,
+                intermediateTypes = emptyList(),
+                errors = listOf(
+                    CompilationError(
+                        message = "Failed to compile agent: ${e.message}",
+                        source = name,
+                        cause = e,
+                    ),
+                ),
+            )
+        }
+    }
+
+    private fun validateTypeClashes(
+        compiled: CompiledAgent,
+        existingTypeNames: Set<String>,
+        errors: MutableList<CompilationError>,
+    ) {
+        for (typeDef in compiled.intermediateTypes) {
+            if (typeDef.name in existingTypeNames) {
+                errors.add(
+                    CompilationError(
+                        message = "Intermediate type '${typeDef.name}' clashes with existing domain type",
+                        source = typeDef.name,
+                    ),
+                )
+            }
+        }
+    }
+
+    internal fun resolveShortTypeNames(
+        compiled: CompiledAgent,
+        existingTypeNames: Set<String>,
+    ): CompiledAgent {
+        val shortToFqn = existingTypeNames.associateBy { it.substringAfterLast('.') }
+        fun resolve(name: String): String {
+            if (name in existingTypeNames) return name
+            val fqn = shortToFqn[name]
+            if (fqn != null) {
+                logger.info("Resolved short type name '{}' to '{}'", name, fqn)
+                return fqn
+            }
+            return name
+        }
+        val resolvedActions = compiled.actions.map { action ->
+            action.copy(
+                inputTypeNames = action.inputTypeNames.map { resolve(it) }.toSet(),
+                outputTypeName = resolve(action.outputTypeName),
+            )
+        }
+        return compiled.copy(actions = resolvedActions)
+    }
+
+    internal fun inferMissingIntermediateTypes(
+        compiled: CompiledAgent,
+        existingTypeNames: Set<String>,
+    ): List<CompiledTypeDefinition> {
+        val definedIntermediateNames = compiled.intermediateTypes.map { it.name }.toSet()
+        val allKnownNames = existingTypeNames + definedIntermediateNames
+        val referencedNames = compiled.actions.flatMap { action ->
+            action.inputTypeNames + action.outputTypeName
+        }.toSet()
+        val missingNames = referencedNames - allKnownNames
+        val inferred = missingNames.map { name ->
+            logger.warn("Auto-inferring stub intermediate type '{}'", name)
+            CompiledTypeDefinition(name = name, description = "Auto-inferred type")
+        }
+        return compiled.intermediateTypes + inferred
+    }
+}
+
+private fun CompiledTypeDefinition.toDynamicType(): DynamicType {
+    val properties = properties.map { prop ->
+        ValuePropertyDefinition(
+            name = prop.name,
+            type = prop.type,
+            description = prop.description,
+        )
+    }
+    return DynamicType(
+        name = name,
+        description = description,
+        ownProperties = properties,
+    )
+}
+
+private fun CompiledChainAction.toPromptedActionSpec(): PromptedActionSpec {
+    return PromptedActionSpec(
+        name = name,
+        description = description,
+        inputTypeNames = inputTypeNames,
+        outputTypeName = outputTypeName,
+        pre = pre,
+        post = post,
+        prompt = prompt,
+        toolGroups = toolGroups,
+        nullable = nullable,
+    )
 }

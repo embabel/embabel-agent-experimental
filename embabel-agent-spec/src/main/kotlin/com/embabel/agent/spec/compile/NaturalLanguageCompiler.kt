@@ -15,6 +15,7 @@
  */
 package com.embabel.agent.spec.compile
 
+import com.embabel.agent.core.DynamicType
 import com.embabel.agent.spec.model.GoalSpec
 import com.embabel.agent.spec.model.PromptedActionSpec
 import com.embabel.agent.spec.model.StepSpec
@@ -92,6 +93,18 @@ data class CompilationResults(
 }
 
 /**
+ * Result of compiling a multi-action agent from natural language.
+ */
+data class AgentCompilationResult(
+    val actions: List<PromptedActionSpec>,
+    val goal: GoalSpec?,
+    val intermediateTypes: List<DynamicType>,
+    val errors: List<CompilationError> = emptyList(),
+) {
+    val success: Boolean get() = errors.isEmpty() && actions.isNotEmpty()
+}
+
+/**
  * Compiles natural language specifications into executable step specs.
  *
  * The compiler uses an LLM to translate natural language descriptions of actions
@@ -154,6 +167,36 @@ interface NaturalLanguageCompiler {
         spec: NaturalLanguageGoalSpec,
         context: StepSpecContext,
     ): CompilationResult<GoalSpec>
+
+    /**
+     * Compile a multi-action agent from a natural language description.
+     *
+     * The compiler will:
+     * - Analyze the description to decompose the agent into ordered actions
+     * - Define intermediate types for chaining actions
+     * - Auto-infer stub types for any references the LLM forgot to define
+     * - Generate a goal based on the final action output
+     *
+     * @param name Name for the agent
+     * @param description Natural language description of the agent's behavior
+     * @param context The context providing available types and tools
+     * @return Compilation result with actions, goal, intermediate types, or errors
+     */
+    fun compileAgent(
+        name: String,
+        description: String,
+        context: StepSpecContext,
+    ): AgentCompilationResult
+
+    /**
+     * Compile a natural language description, choosing the appropriate strategy.
+     * Currently delegates to [compileAgent].
+     */
+    fun compile(
+        name: String,
+        description: String,
+        context: StepSpecContext,
+    ): AgentCompilationResult = compileAgent(name, description, context)
 
     /**
      * Compile multiple specifications from natural language descriptions.
