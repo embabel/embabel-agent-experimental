@@ -152,8 +152,13 @@ internal open class PromptedActionSpecAction(
         return output
     }
 
-    private fun templateModel(processContext: ProcessContext): Map<String, Any> {
+    internal fun templateModel(processContext: ProcessContext): Map<String, Any> {
         val templateModel = mutableMapOf<String, Any>()
+        // Include all blackboard bindings as base context so that
+        // additional bindings (e.g., dynamic type payload Maps) are
+        // available to prompt templates beyond declared inputs.
+        templateModel.putAll(processContext.blackboard.expressionEvaluationModel())
+        // Declared inputs take precedence
         for (input in inputs) {
             val inputValue = processContext.blackboard[input.name]
                 ?: throw IllegalArgumentException("Input variable '${input.name}' not found in process context.")
