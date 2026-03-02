@@ -104,6 +104,8 @@ class CodeImplementationAgent(
 
     /**
      * Implement a feature based on a specification.
+     *
+     * @param tools optional tool objects to expose to Claude via MCP (objects with @LlmTool, Tool instances, etc.)
      */
     @Action(
         description = "Implement a feature using Claude Code",
@@ -111,46 +113,34 @@ class CodeImplementationAgent(
     fun implementFeature(
         spec: FeatureSpecification,
         codebase: Codebase,
+        tools: List<Any> = emptyList(),
     ): ImplementationOutcome {
         val prompt = buildImplementationPrompt(spec, codebase)
 
-        val result = executor.execute(
-            prompt = prompt,
-            workingDirectory = codebase.path,
-            allowedTools = listOf(
-                ClaudeCodeAllowedTool.READ,
-                ClaudeCodeAllowedTool.EDIT,
-                ClaudeCodeAllowedTool.WRITE,
-                ClaudeCodeAllowedTool.BASH,
-                ClaudeCodeAllowedTool.GLOB,
-                ClaudeCodeAllowedTool.GREP,
-            ),
-            maxTurns = defaultMaxTurns,
-            streamOutput = streamOutput,
-            streamCallback = streamCallback,
-        )
-
-        return when (result) {
-            is ClaudeCodeResult.Success -> ImplementationOutcome(
-                success = true,
-                summary = result.result,
-                filesChanged = result.allAffectedFiles,
-                sessionId = result.sessionId,
-                costUsd = result.costUsd,
-            )
-            is ClaudeCodeResult.Failure -> ImplementationOutcome(
-                success = false,
-                summary = "Implementation failed: ${result.error}",
-            )
-            is ClaudeCodeResult.Denied -> ImplementationOutcome(
-                success = false,
-                summary = "Implementation denied: ${result.reason}",
+        return executeWithTools(tools) { mcpConfig ->
+            executor.execute(
+                prompt = prompt,
+                workingDirectory = codebase.path,
+                allowedTools = listOf(
+                    ClaudeCodeAllowedTool.READ,
+                    ClaudeCodeAllowedTool.EDIT,
+                    ClaudeCodeAllowedTool.WRITE,
+                    ClaudeCodeAllowedTool.BASH,
+                    ClaudeCodeAllowedTool.GLOB,
+                    ClaudeCodeAllowedTool.GREP,
+                ),
+                maxTurns = defaultMaxTurns,
+                streamOutput = streamOutput,
+                streamCallback = streamCallback,
+                mcpConfig = mcpConfig,
             )
         }
     }
 
     /**
      * Fix a bug in the codebase.
+     *
+     * @param tools optional tool objects to expose to Claude via MCP
      */
     @Action(
         description = "Fix a bug using Claude Code",
@@ -159,45 +149,33 @@ class CodeImplementationAgent(
         bugDescription: String,
         codebase: Codebase,
         reproductionSteps: List<String> = emptyList(),
+        tools: List<Any> = emptyList(),
     ): ImplementationOutcome {
         val prompt = buildBugFixPrompt(bugDescription, reproductionSteps)
 
-        val result = executor.execute(
-            prompt = prompt,
-            workingDirectory = codebase.path,
-            allowedTools = listOf(
-                ClaudeCodeAllowedTool.READ,
-                ClaudeCodeAllowedTool.EDIT,
-                ClaudeCodeAllowedTool.BASH,
-                ClaudeCodeAllowedTool.GLOB,
-                ClaudeCodeAllowedTool.GREP,
-            ),
-            maxTurns = defaultMaxTurns,
-            streamOutput = streamOutput,
-            streamCallback = streamCallback,
-        )
-
-        return when (result) {
-            is ClaudeCodeResult.Success -> ImplementationOutcome(
-                success = true,
-                summary = result.result,
-                filesChanged = result.allAffectedFiles,
-                sessionId = result.sessionId,
-                costUsd = result.costUsd,
-            )
-            is ClaudeCodeResult.Failure -> ImplementationOutcome(
-                success = false,
-                summary = "Bug fix failed: ${result.error}",
-            )
-            is ClaudeCodeResult.Denied -> ImplementationOutcome(
-                success = false,
-                summary = "Bug fix denied: ${result.reason}",
+        return executeWithTools(tools) { mcpConfig ->
+            executor.execute(
+                prompt = prompt,
+                workingDirectory = codebase.path,
+                allowedTools = listOf(
+                    ClaudeCodeAllowedTool.READ,
+                    ClaudeCodeAllowedTool.EDIT,
+                    ClaudeCodeAllowedTool.BASH,
+                    ClaudeCodeAllowedTool.GLOB,
+                    ClaudeCodeAllowedTool.GREP,
+                ),
+                maxTurns = defaultMaxTurns,
+                streamOutput = streamOutput,
+                streamCallback = streamCallback,
+                mcpConfig = mcpConfig,
             )
         }
     }
 
     /**
      * Add tests for existing code.
+     *
+     * @param tools optional tool objects to expose to Claude via MCP
      */
     @Action(
         description = "Add tests using Claude Code",
@@ -206,46 +184,34 @@ class CodeImplementationAgent(
         targetDescription: String,
         codebase: Codebase,
         testFramework: String? = null,
+        tools: List<Any> = emptyList(),
     ): ImplementationOutcome {
         val prompt = buildTestPrompt(targetDescription, testFramework)
 
-        val result = executor.execute(
-            prompt = prompt,
-            workingDirectory = codebase.path,
-            allowedTools = listOf(
-                ClaudeCodeAllowedTool.READ,
-                ClaudeCodeAllowedTool.EDIT,
-                ClaudeCodeAllowedTool.WRITE,
-                ClaudeCodeAllowedTool.BASH,
-                ClaudeCodeAllowedTool.GLOB,
-                ClaudeCodeAllowedTool.GREP,
-            ),
-            maxTurns = defaultMaxTurns,
-            streamOutput = streamOutput,
-            streamCallback = streamCallback,
-        )
-
-        return when (result) {
-            is ClaudeCodeResult.Success -> ImplementationOutcome(
-                success = true,
-                summary = result.result,
-                filesChanged = result.allAffectedFiles,
-                sessionId = result.sessionId,
-                costUsd = result.costUsd,
-            )
-            is ClaudeCodeResult.Failure -> ImplementationOutcome(
-                success = false,
-                summary = "Adding tests failed: ${result.error}",
-            )
-            is ClaudeCodeResult.Denied -> ImplementationOutcome(
-                success = false,
-                summary = "Adding tests denied: ${result.reason}",
+        return executeWithTools(tools) { mcpConfig ->
+            executor.execute(
+                prompt = prompt,
+                workingDirectory = codebase.path,
+                allowedTools = listOf(
+                    ClaudeCodeAllowedTool.READ,
+                    ClaudeCodeAllowedTool.EDIT,
+                    ClaudeCodeAllowedTool.WRITE,
+                    ClaudeCodeAllowedTool.BASH,
+                    ClaudeCodeAllowedTool.GLOB,
+                    ClaudeCodeAllowedTool.GREP,
+                ),
+                maxTurns = defaultMaxTurns,
+                streamOutput = streamOutput,
+                streamCallback = streamCallback,
+                mcpConfig = mcpConfig,
             )
         }
     }
 
     /**
      * Refactor code according to a specification.
+     *
+     * @param tools optional tool objects to expose to Claude via MCP
      */
     @Action(
         description = "Refactor code using Claude Code",
@@ -254,39 +220,25 @@ class CodeImplementationAgent(
         refactoringDescription: String,
         codebase: Codebase,
         scope: List<String> = emptyList(),
+        tools: List<Any> = emptyList(),
     ): ImplementationOutcome {
         val prompt = buildRefactorPrompt(refactoringDescription, scope)
 
-        val result = executor.execute(
-            prompt = prompt,
-            workingDirectory = codebase.path,
-            allowedTools = listOf(
-                ClaudeCodeAllowedTool.READ,
-                ClaudeCodeAllowedTool.EDIT,
-                ClaudeCodeAllowedTool.BASH,
-                ClaudeCodeAllowedTool.GLOB,
-                ClaudeCodeAllowedTool.GREP,
-            ),
-            maxTurns = defaultMaxTurns,
-            streamOutput = streamOutput,
-            streamCallback = streamCallback,
-        )
-
-        return when (result) {
-            is ClaudeCodeResult.Success -> ImplementationOutcome(
-                success = true,
-                summary = result.result,
-                filesChanged = result.allAffectedFiles,
-                sessionId = result.sessionId,
-                costUsd = result.costUsd,
-            )
-            is ClaudeCodeResult.Failure -> ImplementationOutcome(
-                success = false,
-                summary = "Refactoring failed: ${result.error}",
-            )
-            is ClaudeCodeResult.Denied -> ImplementationOutcome(
-                success = false,
-                summary = "Refactoring denied: ${result.reason}",
+        return executeWithTools(tools) { mcpConfig ->
+            executor.execute(
+                prompt = prompt,
+                workingDirectory = codebase.path,
+                allowedTools = listOf(
+                    ClaudeCodeAllowedTool.READ,
+                    ClaudeCodeAllowedTool.EDIT,
+                    ClaudeCodeAllowedTool.BASH,
+                    ClaudeCodeAllowedTool.GLOB,
+                    ClaudeCodeAllowedTool.GREP,
+                ),
+                maxTurns = defaultMaxTurns,
+                streamOutput = streamOutput,
+                streamCallback = streamCallback,
+                mcpConfig = mcpConfig,
             )
         }
     }
@@ -328,23 +280,7 @@ class CodeImplementationAgent(
             sessionId = sessionId,
         )
 
-        return when (result) {
-            is ClaudeCodeResult.Success -> ImplementationOutcome(
-                success = true,
-                summary = result.result,
-                filesChanged = result.allAffectedFiles,
-                sessionId = result.sessionId,
-                costUsd = result.costUsd,
-            )
-            is ClaudeCodeResult.Failure -> ImplementationOutcome(
-                success = false,
-                summary = "Continuation failed: ${result.error}",
-            )
-            is ClaudeCodeResult.Denied -> ImplementationOutcome(
-                success = false,
-                summary = "Continuation denied: ${result.reason}",
-            )
-        }
+        return toOutcome(result)
     }
 
     /**
@@ -402,23 +338,47 @@ class CodeImplementationAgent(
             sessionId = sessionId,
         )
 
-        return when (result) {
-            is ClaudeCodeResult.Success -> ImplementationOutcome(
-                success = true,
-                summary = result.result,
-                filesChanged = result.allAffectedFiles,
-                sessionId = result.sessionId,
-                costUsd = result.costUsd,
-            )
-            is ClaudeCodeResult.Failure -> ImplementationOutcome(
-                success = false,
-                summary = "PR creation failed: ${result.error}",
-            )
-            is ClaudeCodeResult.Denied -> ImplementationOutcome(
-                success = false,
-                summary = "PR creation denied: ${result.reason}",
-            )
+        return toOutcome(result)
+    }
+
+    /**
+     * Execute an action with optional tools exposed via an ephemeral MCP server.
+     * Handles MCP server lifecycle (start/stop) around the execution.
+     */
+    private fun executeWithTools(
+        tools: List<Any>,
+        execution: (mcpConfig: String?) -> ClaudeCodeResult,
+    ): ImplementationOutcome {
+        var mcpServer: EphemeralMcpToolServer? = null
+        try {
+            val mcpConfig = if (tools.isNotEmpty()) {
+                mcpServer = EphemeralMcpToolServer(tools)
+                mcpServer.toMcpConfigJson()
+            } else {
+                null
+            }
+            return toOutcome(execution(mcpConfig))
+        } finally {
+            mcpServer?.close()
         }
+    }
+
+    private fun toOutcome(result: ClaudeCodeResult): ImplementationOutcome = when (result) {
+        is ClaudeCodeResult.Success -> ImplementationOutcome(
+            success = true,
+            summary = result.result,
+            filesChanged = result.allAffectedFiles,
+            sessionId = result.sessionId,
+            costUsd = result.costUsd,
+        )
+        is ClaudeCodeResult.Failure -> ImplementationOutcome(
+            success = false,
+            summary = "Failed: ${result.error}",
+        )
+        is ClaudeCodeResult.Denied -> ImplementationOutcome(
+            success = false,
+            summary = "Denied: ${result.reason}",
+        )
     }
 
     private fun buildImplementationPrompt(spec: FeatureSpecification, codebase: Codebase): String {

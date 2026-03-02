@@ -15,7 +15,9 @@
  */
 package com.embabel.agent.claudecode
 
-import com.embabel.agent.sandbox.AsyncExecution
+import com.embabel.agent.executor.AgentExecutor
+import com.embabel.agent.executor.AgentRequest
+import com.embabel.agent.executor.TypedResult
 import com.embabel.agent.sandbox.DockerExecutor
 import com.embabel.agent.sandbox.ExecutionRequest
 import com.embabel.agent.sandbox.ExecutionResult
@@ -23,8 +25,8 @@ import com.embabel.agent.sandbox.SandboxedExecutor
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
+import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -88,7 +90,7 @@ class ClaudeCodeExecutor(
     private val defaultPermissionMode: ClaudeCodePermissionMode = ClaudeCodePermissionMode.ACCEPT_EDITS,
     private val environment: Map<String, String> = emptyMap(),
     private val sandboxExecutor: SandboxedExecutor? = null,
-) {
+) : AgentExecutor {
 
     private val logger = LoggerFactory.getLogger(javaClass)
     private val objectMapper = jacksonObjectMapper()
@@ -164,6 +166,7 @@ class ClaudeCodeExecutor(
         systemPrompt: String? = null,
         streamOutput: Boolean = false,
         streamCallback: ((ClaudeStreamEvent) -> Unit)? = null,
+        mcpConfig: String? = null,
     ): ClaudeCodeResult {
         // Check availability first
         checkAvailability()?.let { return it }
@@ -177,6 +180,7 @@ class ClaudeCodeExecutor(
             model = model,
             systemPrompt = systemPrompt,
             streamOutput = streamOutput,
+            mcpConfig = mcpConfig,
         )
 
         logger.info(
@@ -261,6 +265,7 @@ class ClaudeCodeExecutor(
         model: String? = null,
         systemPrompt: String? = null,
         streamOutput: Boolean = false,
+        mcpConfig: String? = null,
     ): ClaudeCodeAsyncExecution {
         // Check availability first
         checkAvailability()?.let {
@@ -276,6 +281,7 @@ class ClaudeCodeExecutor(
             model = model,
             systemPrompt = systemPrompt,
             streamOutput = streamOutput,
+            mcpConfig = mcpConfig,
         )
 
         logger.info(
@@ -591,7 +597,7 @@ class ClaudeCodeExecutor(
         }
     }
 
-    private fun buildCommand(
+    internal fun buildCommand(
         prompt: String,
         allowedTools: List<ClaudeCodeAllowedTool>?,
         maxTurns: Int?,
@@ -600,6 +606,7 @@ class ClaudeCodeExecutor(
         model: String?,
         systemPrompt: String?,
         streamOutput: Boolean = false,
+        mcpConfig: String? = null,
     ): List<String> {
         // stream-json format requires --verbose flag when used with -p (print) mode
         val outputFormat = if (streamOutput) "stream-json" else "json"
@@ -652,6 +659,15 @@ class ClaudeCodeExecutor(
         systemPrompt?.let {
             command.add("--system-prompt")
             command.add(it)
+        }
+
+        mcpConfig?.let { config ->
+            // Write MCP config to a temp file since it may exceed CLI arg limits
+            val configFile = Files.createTempFile("mcp-config-", ".json")
+            Files.writeString(configFile, config)
+            configFile.toFile().deleteOnExit()
+            command.add("--mcp-config")
+            command.add(configFile.toAbsolutePath().toString())
         }
 
         return command
@@ -707,6 +723,210 @@ class ClaudeCodeExecutor(
                     duration = duration,
                 )
             }
+        }
+    }
+
+    override fun <T : Any> executeTyped(request: AgentRequest<T>): TypedResult<T> =
+        executeTyped(request = request, workingDirectory = null)
+
+    /**
+     * Execute a typed request with fitness evaluation and optional retry.
+     *
+     * This method handles the full flow:
+     * 1. If tools are provided, starts an [EphemeralMcpToolServer]
+     * 2. Builds a system prompt instructing Claude to return JSON matching the output type
+     * 3. Calls [execute] with the prompt
+     * 4. Parses the result as JSON and deserializes to the output type
+     * 5. Evaluates fitness; retries if below threshold and retries remain
+     * 6. Returns the best attempt (highest score)
+     *
+     * @param request the typed agent request
+     * @param workingDirectory the working directory for execution
+     * @param allowedTools list of tools Claude Code is allowed to use
+     * @param maxTurns maximum number of agentic turns
+     * @param permissionMode how to handle permission requests
+     * @param timeout maximum execution time
+     * @param model optional model to use
+     */
+    fun <T : Any> executeTyped(
+        request: AgentRequest<T>,
+        workingDirectory: Path? = null,
+        allowedTools: List<ClaudeCodeAllowedTool>? = null,
+        maxTurns: Int? = null,
+        permissionMode: ClaudeCodePermissionMode = defaultPermissionMode,
+        timeout: Duration = defaultTimeout,
+        model: String? = null,
+    ): TypedResult<T> {
+        var mcpServer: EphemeralMcpToolServer? = null
+
+        try {
+            // Start ephemeral MCP server if tools are provided
+            val mcpConfig = if (request.tools.isNotEmpty()) {
+                mcpServer = EphemeralMcpToolServer(request.tools)
+                mcpServer.toMcpConfigJson()
+            } else {
+                null
+            }
+
+            // Build system prompt for structured JSON output
+            val jsonSchema = generateJsonSchema(request.outputClass)
+            val systemPrompt = buildString {
+                appendLine("You MUST respond with valid JSON matching this schema:")
+                appendLine(jsonSchema)
+                appendLine()
+                appendLine("Return ONLY the JSON object, no markdown fencing, no explanation.")
+            }
+
+            var bestResult: TypedResult.Success<T>? = null
+            val maxAttempts = 1 + request.maxRetries
+
+            for (attempt in 1..maxAttempts) {
+                val prompt = if (attempt == 1) {
+                    request.prompt()
+                } else {
+                    val feedback = buildString {
+                        appendLine(request.prompt())
+                        appendLine()
+                        appendLine("Previous attempt scored ${bestResult?.score ?: 0.0}. Please improve your response.")
+                    }
+                    feedback
+                }
+
+                val result = execute(
+                    prompt = prompt,
+                    workingDirectory = workingDirectory,
+                    allowedTools = allowedTools,
+                    maxTurns = maxTurns,
+                    permissionMode = permissionMode,
+                    timeout = timeout,
+                    model = model,
+                    systemPrompt = systemPrompt,
+                    mcpConfig = mcpConfig,
+                )
+
+                if (result !is ClaudeCodeResult.Success) {
+                    logger.warn("Typed execution attempt {}/{} failed: {}", attempt, maxAttempts, result)
+                    if (bestResult != null) continue
+                    return TypedResult.Failure(
+                        error = when (result) {
+                            is ClaudeCodeResult.Failure -> result.error
+                            is ClaudeCodeResult.Denied -> result.reason
+                            else -> "Unknown failure"
+                        },
+                        raw = result,
+                    )
+                }
+
+                // Parse JSON from the response
+                val parsed = try {
+                    extractAndParse(result.result, request.outputClass)
+                } catch (e: Exception) {
+                    logger.warn("Typed execution attempt {}/{}: JSON parse failed: {}", attempt, maxAttempts, e.message)
+                    continue
+                }
+
+                // Evaluate fitness
+                val score = request.fitnessFunction(parsed)
+                logger.info("Typed execution attempt {}/{}: fitness score = {}", attempt, maxAttempts, score)
+
+                val candidate = TypedResult.Success(
+                    value = parsed,
+                    score = score,
+                    attempts = attempt,
+                    raw = result,
+                )
+
+                if (bestResult == null || score > bestResult.score) {
+                    bestResult = candidate
+                }
+
+                if (score >= request.fitnessThreshold) {
+                    return bestResult
+                }
+            }
+
+            // Return best attempt if we have one
+            return bestResult ?: TypedResult.Failure(error = "All $maxAttempts attempts failed to produce parseable output")
+        } finally {
+            mcpServer?.close()
+        }
+    }
+
+    /**
+     * Extract JSON from a Claude response that may contain markdown fencing or extra text.
+     */
+    internal fun <T> extractAndParse(text: String, clazz: Class<T>): T {
+        val json = extractJson(text)
+        return objectMapper.readValue(json, clazz)
+    }
+
+    /**
+     * Extract a JSON object or array from text, stripping markdown fencing if present.
+     */
+    internal fun extractJson(text: String): String {
+        // Try stripping markdown code fences first
+        val fencePattern = Regex("```(?:json)?\\s*\\n?(.*?)\\n?```", RegexOption.DOT_MATCHES_ALL)
+        val fenceMatch = fencePattern.find(text)
+        if (fenceMatch != null) {
+            return fenceMatch.groupValues[1].trim()
+        }
+
+        // Try to find raw JSON object or array
+        val trimmed = text.trim()
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            return trimmed
+        }
+
+        // Find first { or [ and last } or ]
+        val start = trimmed.indexOfFirst { it == '{' || it == '[' }
+        val end = trimmed.indexOfLast { it == '}' || it == ']' }
+        if (start >= 0 && end > start) {
+            return trimmed.substring(start, end + 1)
+        }
+
+        return trimmed
+    }
+
+    internal fun generateJsonSchema(clazz: Class<*>): String {
+        if (clazz == String::class.java) {
+            return """{"type": "string"}"""
+        }
+        return try {
+            val config = objectMapper.serializationConfig
+            val javaType = objectMapper.constructType(clazz)
+            val beanDesc = config.introspect(javaType)
+            val properties = mutableMapOf<String, Any>()
+            val required = mutableListOf<String>()
+
+            for (propDef in beanDesc.findProperties()) {
+                val name = propDef.name
+                val propType = propDef.primaryType
+                val typeStr = when {
+                    propType.isTypeOrSubTypeOf(String::class.java) -> "string"
+                    propType.isTypeOrSubTypeOf(Int::class.java) ||
+                        propType.isTypeOrSubTypeOf(Long::class.java) ||
+                        propType.isTypeOrSubTypeOf(java.lang.Integer::class.java) ||
+                        propType.isTypeOrSubTypeOf(java.lang.Long::class.java) -> "integer"
+                    propType.isTypeOrSubTypeOf(Double::class.java) ||
+                        propType.isTypeOrSubTypeOf(Float::class.java) ||
+                        propType.isTypeOrSubTypeOf(java.lang.Double::class.java) ||
+                        propType.isTypeOrSubTypeOf(java.lang.Float::class.java) -> "number"
+                    propType.isTypeOrSubTypeOf(Boolean::class.java) ||
+                        propType.isTypeOrSubTypeOf(java.lang.Boolean::class.java) -> "boolean"
+                    propType.isCollectionLikeType || propType.isArrayType -> "array"
+                    else -> "object"
+                }
+                properties[name] = mapOf("type" to typeStr)
+                required.add(name)
+            }
+
+            val schema = mutableMapOf<String, Any>("type" to "object", "properties" to properties)
+            if (required.isNotEmpty()) {
+                schema["required"] = required
+            }
+            objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(schema)
+        } catch (_: Exception) {
+            """{"type": "object"}"""
         }
     }
 
