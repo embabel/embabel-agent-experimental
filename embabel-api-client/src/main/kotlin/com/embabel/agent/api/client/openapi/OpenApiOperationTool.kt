@@ -197,12 +197,20 @@ class OpenApiOperationTool(
 
         private fun mapParameter(param: Parameter): Tool.Parameter {
             val type = mapSchemaType(param.schema)
+            val itemType = if (type == Tool.ParameterType.ARRAY && param.schema != null) {
+                if (param.schema is ArraySchema) {
+                    (param.schema as ArraySchema).items?.let { mapSchemaType(it) } ?: Tool.ParameterType.STRING
+                } else {
+                    Tool.ParameterType.STRING
+                }
+            } else null
             return Tool.Parameter(
                 name = param.name,
                 type = type,
                 description = param.description ?: param.name,
                 required = param.required ?: (param.`in` == "path"),
                 enumValues = param.schema?.enum?.map { it.toString() },
+                itemType = itemType,
             )
         }
 
@@ -226,8 +234,13 @@ class OpenApiOperationTool(
                 }
             } else null
 
-            val itemType = if (type == Tool.ParameterType.ARRAY && schema is ArraySchema) {
-                schema.items?.let { mapSchemaType(it) }
+            val itemType = if (type == Tool.ParameterType.ARRAY) {
+                if (schema is ArraySchema) {
+                    schema.items?.let { mapSchemaType(it) } ?: Tool.ParameterType.STRING
+                } else {
+                    // Fallback for array params without ArraySchema (e.g. Swagger 2.0 conversion)
+                    Tool.ParameterType.STRING
+                }
             } else null
 
             return Tool.Parameter(

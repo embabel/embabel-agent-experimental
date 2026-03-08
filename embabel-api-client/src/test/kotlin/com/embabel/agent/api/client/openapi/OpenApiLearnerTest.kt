@@ -18,6 +18,7 @@ package com.embabel.agent.api.client.openapi
 import com.embabel.agent.api.client.*
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
+import com.embabel.agent.api.tool.progressive.UnfoldingTool
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -109,6 +110,20 @@ class OpenApiLearnerTest {
         assertTrue("getInventory" in names)
         assertTrue("createUser" in names)
         assertEquals(7, allInnerTools.size)
+    }
+
+    @Test
+    fun `created tool is an UnfoldingTool for framework injection compatibility`() {
+        val tool = learned().create()
+        assertInstanceOf(UnfoldingTool::class.java, tool,
+            "Tool must be an UnfoldingTool so the framework's UnfoldingToolInjectionStrategy can unwrap it")
+    }
+
+    @Test
+    fun `created tool from credential store is an UnfoldingTool`() {
+        val store = MapCredentialStore()
+        val tool = learned().create(store)
+        assertInstanceOf(UnfoldingTool::class.java, tool)
     }
 
     // --- Operation tool details ---

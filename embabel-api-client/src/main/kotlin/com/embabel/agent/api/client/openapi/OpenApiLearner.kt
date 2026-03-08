@@ -95,11 +95,7 @@ class OpenApiLearner : ApiLearner {
             )
         }
 
-        return object : ProgressiveTool {
-            override val definition: Tool.Definition get() = delegate.definition
-            override fun call(input: String): Tool.Result = delegate.call(input)
-            override fun innerTools(process: AgentProcess): List<Tool> = delegate.innerTools(process)
-        }
+        return delegate
     }
 
     private fun buildRestClient(

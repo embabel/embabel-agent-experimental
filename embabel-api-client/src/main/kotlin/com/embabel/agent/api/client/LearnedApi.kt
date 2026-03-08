@@ -38,4 +38,11 @@ data class LearnedApi(
      */
     fun create(credentials: ApiCredentials = ApiCredentials.None): ProgressiveTool =
         factory(credentials)
+
+    /**
+     * Create a [ProgressiveTool] for this API, looking up credentials by [name]
+     * from the given [CredentialStore].
+     */
+    fun create(credentialStore: CredentialStore): ProgressiveTool =
+        factory(credentialStore.credentialsFor(name))
 }
