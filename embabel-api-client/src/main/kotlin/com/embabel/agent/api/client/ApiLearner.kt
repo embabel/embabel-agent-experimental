@@ -15,8 +15,6 @@
  */
 package com.embabel.agent.api.client
 
-import com.embabel.agent.api.tool.progressive.ProgressiveTool
-
 /**
  * Learns an API from a machine-readable description and produces a [LearnedApi].
  *
@@ -36,25 +34,6 @@ interface ApiLearner {
 }
 
 /**
- * The result of an [ApiLearner] learning an API. Describes what was learned
- * (name, description, auth requirements) and provides a [create]
- * method to produce a usable [ProgressiveTool] once credentials are supplied.
- */
-data class LearnedApi(
-    val name: String,
-    val description: String,
-    val authRequirements: List<AuthRequirement>,
-    private val factory: (ApiCredentials) -> ProgressiveTool,
-) {
-
-    /**
-     * Create a [ProgressiveTool] for this API, supplying any required credentials.
-     */
-    fun create(credentials: ApiCredentials = ApiCredentials.None): ProgressiveTool =
-        factory(credentials)
-}
-
-/**
  * What kind of authentication an API requires.
  * Extracted from the API spec (e.g., OpenAPI securitySchemes).
  */
@@ -67,14 +46,4 @@ sealed interface AuthRequirement {
 
 enum class ApiKeyLocation {
     HEADER, QUERY, COOKIE
-}
-
-/**
- * Credentials supplied by the caller to satisfy [AuthRequirement]s.
- */
-sealed interface ApiCredentials {
-    data object None : ApiCredentials
-    data class Token(val token: String) : ApiCredentials
-    data class ApiKey(val value: String) : ApiCredentials
-    data class Multiple(val credentials: List<ApiCredentials>) : ApiCredentials
 }
