@@ -27,6 +27,7 @@
         <module>embabel-agent-remote</module>
         <module>embabel-agent-skills</module>
         <module>embabel-agent-spec</module>
+        <module>embabel-api-client</module>
     </modules>
 
     <scm>
