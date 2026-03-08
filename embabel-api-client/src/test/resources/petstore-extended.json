@@ -1,0 +1,501 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Petstore Extended",
+    "description": "Extended petstore API for thorough testing",
+    "version": "2.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://petstore.example.com/api/v2"
+    }
+  ],
+  "paths": {
+    "/pets": {
+      "get": {
+        "operationId": "listPets",
+        "summary": "List all pets",
+        "description": "Returns all pets in the store with optional filtering",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by pet status",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["available", "pending", "sold"]
+              }
+            }
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "description": "Filter by tags",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Filter by name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addPet",
+        "summary": "Add a new pet",
+        "tags": ["pets"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "photoUrls"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The pet name"
+                  },
+                  "tag": {
+                    "type": "string",
+                    "description": "Optional tag"
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "Pet status",
+                    "enum": ["available", "pending", "sold"]
+                  },
+                  "photoUrls": {
+                    "type": "array",
+                    "description": "Photo URLs",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "category": {
+                    "type": "object",
+                    "description": "Pet category",
+                    "properties": {
+                      "id": {
+                        "type": "integer",
+                        "description": "Category ID"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "Category name"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Pet created"
+          }
+        }
+      }
+    },
+    "/pets/{petId}": {
+      "get": {
+        "operationId": "getPetById",
+        "summary": "Get a pet by ID",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      },
+      "put": {
+        "operationId": "updatePet",
+        "summary": "Update a pet",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Pet updated"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deletePet",
+        "summary": "Delete a pet",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Pet deleted"
+          }
+        }
+      }
+    },
+    "/pets/{petId}/uploadImage": {
+      "post": {
+        "operationId": "uploadPetImage",
+        "summary": "Upload an image for a pet",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "Image URL"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Image uploaded"
+          }
+        }
+      }
+    },
+    "/store/inventory": {
+      "get": {
+        "operationId": "getInventory",
+        "summary": "Returns pet inventories by status",
+        "tags": ["store"],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/store/order": {
+      "post": {
+        "operationId": "placeOrder",
+        "summary": "Place an order for a pet",
+        "tags": ["store"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "petId": {
+                    "type": "integer"
+                  },
+                  "quantity": {
+                    "type": "integer"
+                  },
+                  "shipDate": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": ["placed", "approved", "delivered"]
+                  },
+                  "complete": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Order placed"
+          }
+        }
+      }
+    },
+    "/store/order/{orderId}": {
+      "get": {
+        "operationId": "getOrderById",
+        "summary": "Find purchase order by ID",
+        "tags": ["store"],
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteOrder",
+        "summary": "Delete purchase order by ID",
+        "tags": ["store"],
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order deleted"
+          }
+        }
+      }
+    },
+    "/users": {
+      "post": {
+        "operationId": "createUser",
+        "summary": "Create user",
+        "tags": ["user"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["username"],
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "description": "The username"
+                  },
+                  "email": {
+                    "type": "string",
+                    "description": "User email"
+                  },
+                  "phone": {
+                    "type": "string",
+                    "description": "User phone"
+                  },
+                  "userStatus": {
+                    "type": "integer",
+                    "description": "User status"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User created"
+          }
+        }
+      }
+    },
+    "/users/{username}": {
+      "get": {
+        "operationId": "getUserByName",
+        "summary": "Get user by user name",
+        "tags": ["user"],
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateUser",
+        "summary": "Update user",
+        "tags": ["user"],
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User updated"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteUser",
+        "summary": "Delete user",
+        "tags": ["user"],
+        "parameters": [
+          {
+            "name": "username",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User deleted"
+          }
+        }
+      }
+    },
+    "/no-tags-or-id": {
+      "get": {
+        "summary": "Operation without tags or operationId",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/pets/findByStatus": {
+      "get": {
+        "operationId": "findPetsByStatus",
+        "summary": "Finds pets by status",
+        "description": "Multiple status values can be provided with comma separated strings",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Status values that need to be considered for filter",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["available", "pending", "sold"]
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          }
+        }
+      }
+    }
+  }
+}

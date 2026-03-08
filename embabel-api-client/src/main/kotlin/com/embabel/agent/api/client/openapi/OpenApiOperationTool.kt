@@ -91,7 +91,7 @@ class OpenApiOperationTool(
         return resolved
     }
 
-    private fun resolveQueryParams(params: Map<String, Any?>): Map<String, String> {
+    private fun resolveQueryParams(params: Map<String, Any?>): Map<String, List<String>> {
         val pathParams = pathParameterNames().toSet()
         val queryParamNames = (operation.parameters ?: emptyList())
             .filter { it.`in` == "query" }
@@ -101,7 +101,12 @@ class OpenApiOperationTool(
         return params
             .filter { it.key in queryParamNames && it.key !in pathParams && it.key != "body" }
             .filter { it.value != null }
-            .mapValues { it.value.toString() }
+            .mapValues { entry ->
+                when (val v = entry.value) {
+                    is Collection<*> -> v.mapNotNull { it?.toString() }
+                    else -> listOf(v.toString())
+                }
+            }
     }
 
     private fun pathParameterNames(): List<String> {
@@ -109,12 +114,14 @@ class OpenApiOperationTool(
         return regex.findAll(path).map { it.groupValues[1] }.toList()
     }
 
-    private fun buildUri(resolvedPath: String, queryParams: Map<String, String>): String {
+    private fun buildUri(resolvedPath: String, queryParams: Map<String, List<String>>): String {
         val builder = UriComponentsBuilder
             .fromUriString(baseUrl.trimEnd('/') + resolvedPath)
 
-        queryParams.forEach { (key, value) ->
-            builder.queryParam(key, value)
+        queryParams.forEach { (key, values) ->
+            values.forEach { value ->
+                builder.queryParam(key, value)
+            }
         }
 
         return builder.build().toUriString()
