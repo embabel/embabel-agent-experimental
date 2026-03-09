@@ -16,6 +16,9 @@
 package com.embabel.agent.spec.support
 
 import com.embabel.agent.api.common.OperationContext
+import com.embabel.agent.api.common.PromptRunner
+import com.embabel.agent.api.reference.LlmReference
+import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.core.*
 import com.embabel.agent.core.support.AbstractAction
 import com.embabel.agent.domain.io.UserInput
@@ -35,6 +38,8 @@ internal open class PromptedActionSpecAction(
         ToolGroupRequirement(it)
     }.toSet(),
     override val domainTypes: Collection<DomainType>,
+    private val resolvedTools: List<Tool> = emptyList(),
+    private val resolvedReferences: List<LlmReference> = emptyList(),
 ) : AbstractAction(
     name = spec.name,
     description = spec.description,
@@ -92,6 +97,20 @@ internal open class PromptedActionSpecAction(
         }
     }
 
+    private fun basePromptRunner(context: OperationContext): PromptRunner {
+        var runner = context.ai()
+            .withLlm(spec.llm)
+            .withId("action:${name}")
+            .withToolGroups(toolGroups.map { it.role }.toSet())
+        if (resolvedTools.isNotEmpty()) {
+            runner = runner.withTools(resolvedTools)
+        }
+        if (resolvedReferences.isNotEmpty()) {
+            runner = runner.withReferences(resolvedReferences)
+        }
+        return runner
+    }
+
     private fun callLlmUntyped(processContext: ProcessContext): String {
         val context = OperationContext(
             processContext = processContext,
@@ -102,10 +121,7 @@ internal open class PromptedActionSpecAction(
         logger.info("Input map for void action name {}: {}", name, templateModel)
         val prompt = context.agentPlatform().platformServices.templateRenderer
             .renderLiteralTemplate(spec.prompt, templateModel)
-        return context.ai()
-            .withLlm(spec.llm)
-            .withId("action:${name}")
-            .withToolGroups(toolGroups.map { it.role }.toSet())
+        return basePromptRunner(context)
             .generateText(prompt = prompt)
     }
 
@@ -124,10 +140,7 @@ internal open class PromptedActionSpecAction(
         val prompt = context.agentPlatform().platformServices.templateRenderer
             .renderLiteralTemplate(spec.prompt, templateModel)
 
-        val result = context.ai()
-            .withLlm(spec.llm)
-            .withId("action:${name}")
-            .withToolGroups(toolGroups.map { it.role }.toSet())
+        val result = basePromptRunner(context)
             .createObject(prompt, outputType.clazz)
         return result
     }
@@ -153,10 +166,7 @@ internal open class PromptedActionSpecAction(
         val prompt = context.agentPlatform().platformServices.templateRenderer
             .renderLiteralTemplate(spec.prompt, templateModel)
 
-        val result = context.ai()
-            .withLlm(spec.llm)
-            .withId("action:${name}")
-            .withToolGroups(toolGroups.map { it.role }.toSet())
+        val result = basePromptRunner(context)
             .withPromptContributor(
                 PromptContributor.fixed(
                     """

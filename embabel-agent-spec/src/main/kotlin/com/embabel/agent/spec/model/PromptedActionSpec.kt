@@ -43,6 +43,8 @@ data class PromptedActionSpec(
     val canRerun: Boolean = false,
     val prompt: String,
     val toolGroups: List<String> = emptyList(),
+    val tools: List<String> = emptyList(),
+    val references: List<String> = emptyList(),
     val nullable: Boolean = false,
     @param:JsonPropertyDescription("Type of step, must be 'action'")
     override val stepType: String = "action",
@@ -50,12 +52,16 @@ data class PromptedActionSpec(
 
     override fun emit(stepContext: StepSpecContext): Action {
         val inputs = inputTypeNames.map { IoBinding(variableNameFor(it), it) }.toSet()
+        val toolsByName = stepContext.availableTools.associateBy { it.definition.name }
+        val refsByName = stepContext.availableReferences.associateBy { it.name }
         return PromptedActionSpecAction(
             spec = this,
             inputs = inputs,
             outputVarName = variableNameFor(outputTypeName),
             toolGroups = toolGroups.map { ToolGroupRequirement(it) }.toSet(),
             domainTypes = stepContext.dataDictionary.domainTypes,
+            resolvedTools = tools.mapNotNull { toolsByName[it] },
+            resolvedReferences = references.mapNotNull { refsByName[it] },
         )
     }
 
