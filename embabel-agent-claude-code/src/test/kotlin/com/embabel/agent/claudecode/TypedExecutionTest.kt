@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
 
 class TypedExecutionTest {
 
-    private val executor = ClaudeCodeExecutor()
+    private val executor = ClaudeCodeAgentExecutor()
 
     // --- JSON extraction tests ---
 

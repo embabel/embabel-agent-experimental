@@ -16,8 +16,6 @@
 package com.embabel.agent.claudecode
 
 import com.embabel.agent.api.tool.Tool
-import com.embabel.agent.api.tool.ToolObject
-import com.embabel.agent.core.support.safelyGetToolsFrom
 import com.embabel.agent.spi.support.springai.toSpringToolCallbacks
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper
@@ -33,18 +31,14 @@ import java.net.ServerSocket
 /**
  * An ephemeral MCP SSE server that exposes tool objects to external processes (e.g., Claude CLI).
  *
- * Takes a list of tool objects (objects with `@LlmTool`, [Tool] instances, Spring AI `ToolCallback` instances)
- * and serves them over MCP SSE on a random available port. The server starts on construction
- * and stops on [close].
+ * Takes a list of [Tool] instances and serves them over MCP SSE on a random available port.
+ * The server starts on construction and stops on [close].
  *
- * The conversion chain is:
- * `safelyGetToolsFrom()` → `toSpringToolCallback()` → `McpToolUtils.toSyncToolSpecification()`
- *
- * @param tools list of tool objects to expose
+ * @param tools list of tools to expose
  * @param serverName name for the MCP server (used in config JSON)
  */
 class EphemeralMcpToolServer(
-    tools: List<Any>,
+    tools: List<Tool>,
     private val serverName: String = "embabel-tools",
 ) : AutoCloseable {
 
@@ -59,17 +53,12 @@ class EphemeralMcpToolServer(
     private val tomcat: Tomcat
 
     init {
-        // Convert tool objects to Embabel Tools
-        val embabelTools = tools.flatMap { obj ->
-            safelyGetToolsFrom(ToolObject.from(obj))
-        }
-
         logger.info("Starting ephemeral MCP server '{}' on port {} with {} tools: {}",
-            serverName, port, embabelTools.size,
-            embabelTools.joinToString(", ") { it.definition.name })
+            serverName, port, tools.size,
+            tools.joinToString(", ") { it.definition.name })
 
         // Convert to Spring AI ToolCallbacks, then to MCP SyncToolSpecifications
-        val toolCallbacks = embabelTools.toSpringToolCallbacks()
+        val toolCallbacks = tools.toSpringToolCallbacks()
         val toolSpecs = McpToolUtils.toSyncToolSpecification(toolCallbacks)
 
         // Create transport provider

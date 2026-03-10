@@ -17,6 +17,7 @@ package com.embabel.agent.claudecode
 
 import com.embabel.agent.api.annotation.Action
 import com.embabel.agent.api.annotation.Agent
+import com.embabel.agent.api.tool.Tool
 import java.nio.file.Path
 
 /**
@@ -96,7 +97,7 @@ data class Codebase(
     scan = false, // Typically composed into other agents rather than used standalone
 )
 class CodeImplementationAgent(
-    private val executor: ClaudeCodeExecutor = ClaudeCodeExecutor(),
+    private val executor: ClaudeCodeAgentExecutor = ClaudeCodeAgentExecutor(),
     private val defaultMaxTurns: Int = 30,
     private val streamOutput: Boolean = false,
     private val streamCallback: ((ClaudeStreamEvent) -> Unit)? = null,
@@ -105,7 +106,7 @@ class CodeImplementationAgent(
     /**
      * Implement a feature based on a specification.
      *
-     * @param tools optional tool objects to expose to Claude via MCP (objects with @LlmTool, Tool instances, etc.)
+     * @param tools optional tools to expose to Claude via MCP
      */
     @Action(
         description = "Implement a feature using Claude Code",
@@ -113,7 +114,7 @@ class CodeImplementationAgent(
     fun implementFeature(
         spec: FeatureSpecification,
         codebase: Codebase,
-        tools: List<Any> = emptyList(),
+        tools: List<Tool> = emptyList(),
     ): ImplementationOutcome {
         val prompt = buildImplementationPrompt(spec, codebase)
 
@@ -140,7 +141,7 @@ class CodeImplementationAgent(
     /**
      * Fix a bug in the codebase.
      *
-     * @param tools optional tool objects to expose to Claude via MCP
+     * @param tools optional tools to expose to Claude via MCP
      */
     @Action(
         description = "Fix a bug using Claude Code",
@@ -149,7 +150,7 @@ class CodeImplementationAgent(
         bugDescription: String,
         codebase: Codebase,
         reproductionSteps: List<String> = emptyList(),
-        tools: List<Any> = emptyList(),
+        tools: List<Tool> = emptyList(),
     ): ImplementationOutcome {
         val prompt = buildBugFixPrompt(bugDescription, reproductionSteps)
 
@@ -175,7 +176,7 @@ class CodeImplementationAgent(
     /**
      * Add tests for existing code.
      *
-     * @param tools optional tool objects to expose to Claude via MCP
+     * @param tools optional tools to expose to Claude via MCP
      */
     @Action(
         description = "Add tests using Claude Code",
@@ -184,7 +185,7 @@ class CodeImplementationAgent(
         targetDescription: String,
         codebase: Codebase,
         testFramework: String? = null,
-        tools: List<Any> = emptyList(),
+        tools: List<Tool> = emptyList(),
     ): ImplementationOutcome {
         val prompt = buildTestPrompt(targetDescription, testFramework)
 
@@ -211,7 +212,7 @@ class CodeImplementationAgent(
     /**
      * Refactor code according to a specification.
      *
-     * @param tools optional tool objects to expose to Claude via MCP
+     * @param tools optional tools to expose to Claude via MCP
      */
     @Action(
         description = "Refactor code using Claude Code",
@@ -220,7 +221,7 @@ class CodeImplementationAgent(
         refactoringDescription: String,
         codebase: Codebase,
         scope: List<String> = emptyList(),
-        tools: List<Any> = emptyList(),
+        tools: List<Tool> = emptyList(),
     ): ImplementationOutcome {
         val prompt = buildRefactorPrompt(refactoringDescription, scope)
 
@@ -346,7 +347,7 @@ class CodeImplementationAgent(
      * Handles MCP server lifecycle (start/stop) around the execution.
      */
     private fun executeWithTools(
-        tools: List<Any>,
+        tools: List<Tool>,
         execution: (mcpConfig: String?) -> ClaudeCodeResult,
     ): ImplementationOutcome {
         var mcpServer: EphemeralMcpToolServer? = null

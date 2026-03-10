@@ -205,7 +205,7 @@ enum class ClaudeCodePermissionMode(val cliValue: String) {
 /**
  * Events emitted during streaming Claude Code execution.
  *
- * Use with the `streamCallback` parameter in [ClaudeCodeExecutor.execute] to
+ * Use with the `streamCallback` parameter in [ClaudeCodeAgentExecutor.execute] to
  * receive real-time updates as Claude Code processes a task.
  */
 sealed interface ClaudeStreamEvent {

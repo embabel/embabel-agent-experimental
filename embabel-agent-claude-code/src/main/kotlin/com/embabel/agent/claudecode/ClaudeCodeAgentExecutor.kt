@@ -84,7 +84,7 @@ import kotlin.time.Duration.Companion.minutes
  * @param environment additional environment variables
  * @param sandboxExecutor optional sandbox executor for isolated execution
  */
-class ClaudeCodeExecutor(
+class ClaudeCodeAgentExecutor(
     private val claudeCommand: String = "claude",
     private val defaultTimeout: Duration = 10.minutes,
     private val defaultPermissionMode: ClaudeCodePermissionMode = ClaudeCodePermissionMode.ACCEPT_EDITS,
@@ -947,8 +947,8 @@ class ClaudeCodeExecutor(
         fun sandboxed(
             image: String = "embabel/claude-code-sandbox:latest",
             timeout: Duration = 10.minutes,
-        ): ClaudeCodeExecutor {
-            return ClaudeCodeExecutor(
+        ): ClaudeCodeAgentExecutor {
+            return ClaudeCodeAgentExecutor(
                 defaultTimeout = timeout,
                 sandboxExecutor = DockerExecutor(
                     image = image,
@@ -965,8 +965,8 @@ class ClaudeCodeExecutor(
         fun withSandbox(
             sandbox: SandboxedExecutor,
             timeout: Duration = 10.minutes,
-        ): ClaudeCodeExecutor {
-            return ClaudeCodeExecutor(
+        ): ClaudeCodeAgentExecutor {
+            return ClaudeCodeAgentExecutor(
                 defaultTimeout = timeout,
                 sandboxExecutor = sandbox,
             )

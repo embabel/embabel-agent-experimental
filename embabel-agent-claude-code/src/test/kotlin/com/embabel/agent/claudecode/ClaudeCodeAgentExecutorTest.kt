@@ -18,7 +18,7 @@ package com.embabel.agent.claudecode
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
-class ClaudeCodeExecutorTest {
+class ClaudeCodeAgentExecutorTest {
 
     @Test
     fun `ClaudeCodeAllowedTool has correct CLI names`() {

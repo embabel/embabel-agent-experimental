@@ -15,6 +15,7 @@
  */
 package com.embabel.agent.executor
 
+import com.embabel.agent.api.tool.Tool
 import com.embabel.common.core.types.ZeroToOne
 
 /**
@@ -23,7 +24,7 @@ import com.embabel.common.core.types.ZeroToOne
  * @param prompt lazily evaluated prompt
  * @param outputClass the expected output type for JSON deserialization
  * @param fitnessFunction evaluates quality of the output
- * @param tools tool objects to expose via ephemeral MCP server (objects with @LlmTool, Tool instances, ToolCallback instances)
+ * @param tools tools to expose via ephemeral MCP server
  * @param maxRetries maximum number of retries if fitness is below threshold (0 = no retry)
  * @param fitnessThreshold minimum acceptable fitness score
  */
@@ -31,15 +32,14 @@ data class AgentRequest<T>(
     val prompt: () -> String,
     val outputClass: Class<T>,
     val fitnessFunction: FitnessFunction<T> = { 1.0 },
-    val tools: List<Any> = emptyList(),
+    val tools: List<Tool> = emptyList(),
     val maxRetries: Int = 0,
     val fitnessThreshold: ZeroToOne = 0.8,
 ) {
 
     fun withFitnessFunction(fitnessFunction: FitnessFunction<T>): AgentRequest<T> = copy(fitnessFunction = fitnessFunction)
-    fun withTools(tools: List<Any>): AgentRequest<T> = copy(tools = tools)
-    fun withTool(tool: Any): AgentRequest<T> = copy(tools = tools + tool)
-    fun withToolObjects(vararg toolObjects: Any): AgentRequest<T> = copy(tools = tools + toolObjects.toList())
+    fun withTools(tools: List<Tool>): AgentRequest<T> = copy(tools = tools)
+    fun withTool(tool: Tool): AgentRequest<T> = copy(tools = tools + tool)
     fun withMaxRetries(maxRetries: Int): AgentRequest<T> = copy(maxRetries = maxRetries)
     fun withFitnessThreshold(fitnessThreshold: ZeroToOne): AgentRequest<T> = copy(fitnessThreshold = fitnessThreshold)
 

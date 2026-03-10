@@ -20,8 +20,6 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.nio.file.Path
 import java.nio.file.Paths
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.minutes
 
 /**
  * A Tool that executes agentic coding tasks using Claude Code CLI.
@@ -54,7 +52,7 @@ import kotlin.time.Duration.Companion.minutes
  * @param toolDescription the description for the tool
  */
 class ClaudeCodeTool(
-    private val executor: ClaudeCodeExecutor = ClaudeCodeExecutor(),
+    private val executor: ClaudeCodeAgentExecutor = ClaudeCodeAgentExecutor(),
     private val defaultWorkingDirectory: Path? = null,
     private val defaultAllowedTools: List<ClaudeCodeAllowedTool>? = DEFAULT_ALLOWED_TOOLS,
     private val defaultMaxTurns: Int? = DEFAULT_MAX_TURNS,
@@ -222,7 +220,7 @@ for best results."""
          * Create a read-only tool that can explore but not modify code.
          */
         fun readOnly(
-            executor: ClaudeCodeExecutor = ClaudeCodeExecutor(),
+            executor: ClaudeCodeAgentExecutor = ClaudeCodeAgentExecutor(),
             defaultWorkingDirectory: Path? = null,
         ): ClaudeCodeTool = ClaudeCodeTool(
             executor = executor,
