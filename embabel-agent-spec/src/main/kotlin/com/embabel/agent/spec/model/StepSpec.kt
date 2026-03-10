@@ -22,6 +22,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo
 
 /**
  * Definition of a step in an agent system: Action or Goal.
+ *
+ * Well-known subtypes are listed in [JsonSubTypes]. Additional subtypes
+ * (e.g., from other modules) can be registered via [YmlStepSpecRepository]'s
+ * `additionalSubtypes` parameter, using `@JsonTypeName` on the implementation.
  */
 @JsonTypeInfo(
     use = JsonTypeInfo.Id.NAME,

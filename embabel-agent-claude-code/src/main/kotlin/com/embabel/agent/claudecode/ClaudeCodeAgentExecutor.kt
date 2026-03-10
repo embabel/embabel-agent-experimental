@@ -22,6 +22,7 @@ import com.embabel.agent.sandbox.DockerExecutor
 import com.embabel.agent.sandbox.ExecutionRequest
 import com.embabel.agent.sandbox.ExecutionResult
 import com.embabel.agent.sandbox.SandboxedExecutor
+import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
@@ -94,10 +95,13 @@ class ClaudeCodeAgentExecutor(
     private val defaultTimeout: Duration = 10.minutes,
     private val defaultPermissionMode: ClaudeCodePermissionMode = ClaudeCodePermissionMode.ACCEPT_EDITS,
     private val environment: Map<String, String> = emptyMap(),
+    @JsonIgnore
     private val sandboxExecutor: SandboxedExecutor? = null,
 ) : AgentExecutor {
 
+    @JsonIgnore
     private val logger = LoggerFactory.getLogger(javaClass)
+    @JsonIgnore
     private val objectMapper = jacksonObjectMapper()
 
     /**

@@ -112,6 +112,8 @@ sealed interface TypedResult<T> {
  */
 interface AgentExecutor : ActionSpec {
 
+    override val stepType: String get() = "agent-executor"
+
     /** Prompt template (supports {{variable}} syntax) for the task */
     val prompt: String
 
@@ -120,8 +122,6 @@ interface AgentExecutor : ActionSpec {
 
     /** Output type name to write to the blackboard */
     val outputTypeName: String
-
-    override val stepType: String get() = "agent-executor"
 
     /**
      * Execute a typed request with fitness evaluation and optional retry.
