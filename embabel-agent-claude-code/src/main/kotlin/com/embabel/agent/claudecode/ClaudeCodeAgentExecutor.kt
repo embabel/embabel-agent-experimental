@@ -16,6 +16,7 @@
 package com.embabel.agent.claudecode
 
 import com.embabel.agent.executor.AgentExecutor
+import com.embabel.agent.mcp.EphemeralMcpToolServer
 import com.embabel.agent.executor.AgentRequest
 import com.embabel.agent.executor.TypedResult
 import com.embabel.agent.sandbox.DockerExecutor

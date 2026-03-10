@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.claudecode
+package com.embabel.agent.mcp
 
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.spi.support.springai.toSpringToolCallbacks

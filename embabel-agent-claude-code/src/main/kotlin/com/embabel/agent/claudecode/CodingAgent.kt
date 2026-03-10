@@ -18,6 +18,7 @@ package com.embabel.agent.claudecode
 import com.embabel.agent.api.annotation.Action
 import com.embabel.agent.api.annotation.Agent
 import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.mcp.EphemeralMcpToolServer
 import java.nio.file.Path
 
 /**

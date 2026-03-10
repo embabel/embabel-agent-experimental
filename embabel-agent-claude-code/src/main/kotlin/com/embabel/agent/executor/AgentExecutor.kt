@@ -135,50 +135,66 @@ interface AgentExecutor : ActionSpec {
     override fun emit(stepContext: StepSpecContext): Action {
         val varName = outputTypeName.substringAfterLast('.').decapitalize()
         val inputs = inputTypeNames.map { IoBinding(variableNameFor(it), it) }.toSet()
-        val resolvedTools = stepContext.tools
 
-        return object : AbstractAction(
-            name = this@AgentExecutor.name,
-            description = this@AgentExecutor.description,
+        return AgentExecutorAction(
+            executor = this,
+            varName = varName,
             inputs = inputs,
-            outputs = setOf(IoBinding(varName, outputTypeName)),
-            toolGroups = emptySet(),
-            canRerun = false,
-        ) {
-            override val domainTypes: Collection<DomainType> = stepContext.dataDictionary.domainTypes
+            stepContext = stepContext,
+        )
+    }
+}
 
-            override fun execute(processContext: ProcessContext): ActionStatus {
-                val action = this
-                return ActionRunner.execute(processContext) {
-                    val context = OperationContext(
-                        processContext = processContext,
-                        operation = action,
-                        toolGroups = emptySet(),
-                    )
-                    val templateModel = buildTemplateModel(processContext, inputs)
-                    val renderedPrompt = context.agentPlatform()
-                        .platformServices.templateRenderer
-                        .renderLiteralTemplate(this@AgentExecutor.prompt, templateModel)
+/**
+ * Action that delegates execution to an [AgentExecutor].
+ */
+private class AgentExecutorAction(
+    private val executor: AgentExecutor,
+    private val varName: String,
+    inputs: Set<IoBinding>,
+    stepContext: StepSpecContext,
+) : AbstractAction(
+    name = executor.name,
+    description = executor.description,
+    inputs = inputs,
+    outputs = setOf(IoBinding(varName, executor.outputTypeName)),
+    toolGroups = emptySet(),
+    canRerun = false,
+) {
+    private val resolvedTools = stepContext.tools
 
-                    val request = AgentRequest(
-                        prompt = { renderedPrompt },
-                        outputClass = String::class.java,
-                        tools = resolvedTools,
-                    )
+    override val domainTypes: Collection<DomainType> = stepContext.dataDictionary.domainTypes
 
-                    when (val result = executeTyped(request)) {
-                        is TypedResult.Success ->
-                            processContext.blackboard[varName] = result.value
+    override fun execute(processContext: ProcessContext): ActionStatus {
+        val action = this
+        return ActionRunner.execute(processContext) {
+            val context = OperationContext(
+                processContext = processContext,
+                operation = action,
+                toolGroups = emptySet(),
+            )
+            val templateModel = buildTemplateModel(processContext, inputs)
+            val renderedPrompt = context.agentPlatform()
+                .platformServices.templateRenderer
+                .renderLiteralTemplate(executor.prompt, templateModel)
 
-                        is TypedResult.Failure ->
-                            throw RuntimeException("Agent execution failed: ${result.error}")
-                    }
-                }
+            val request = AgentRequest(
+                prompt = { renderedPrompt },
+                outputClass = String::class.java,
+                tools = resolvedTools,
+            )
+
+            when (val result = executor.executeTyped(request)) {
+                is TypedResult.Success ->
+                    processContext.blackboard[varName] = result.value
+
+                is TypedResult.Failure ->
+                    throw RuntimeException("Agent execution failed: ${result.error}")
             }
-
-            override fun referencedInputProperties(variable: String): Set<String> = emptySet()
         }
     }
+
+    override fun referencedInputProperties(variable: String): Set<String> = emptySet()
 }
 
 private fun variableNameFor(typeName: String): String =
