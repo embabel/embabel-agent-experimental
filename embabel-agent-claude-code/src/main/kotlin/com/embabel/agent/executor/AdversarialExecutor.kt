@@ -78,11 +78,14 @@ fun interface ActionCritic {
  * @param generator the executor that produces output
  * @param critic evaluates the generator's output
  * @param maxAttempts maximum number of generate-critique cycles (must be >= 1)
+ * @param failOnReject if true, return [TypedResult.Failure] when the critic never accepts;
+ *                     if false (default), return the best attempt even if not accepted
  */
 class AdversarialExecutor(
     private val generator: AgentExecutor,
     private val critic: ActionCritic,
     private val maxAttempts: Int = 3,
+    private val failOnReject: Boolean = false,
 ) : AgentExecutor {
 
     override val name: String get() = generator.name
@@ -133,6 +136,16 @@ class AdversarialExecutor(
 
         val best = bestResult
         if (best != null) {
+            if (failOnReject) {
+                logger.warn(
+                    "Critic did not accept after {} attempts, rejecting (score={})",
+                    maxAttempts, best.score,
+                )
+                return TypedResult.Failure(
+                    error = "Critic did not accept after $maxAttempts attempts (best score: ${best.score})",
+                    raw = best.raw,
+                )
+            }
             logger.warn(
                 "Critic did not accept after {} attempts, returning best (score={})",
                 maxAttempts, best.score,

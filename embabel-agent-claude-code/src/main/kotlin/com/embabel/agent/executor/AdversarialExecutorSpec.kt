@@ -38,6 +38,7 @@ import com.fasterxml.jackson.annotation.JsonTypeName
  * @param generator the wrapped generator executor spec (e.g., [ClaudeCodeAgentExecutor])
  * @param criticPrompt Jinja2 template for the critic — has access to `{{output}}` and all input variables
  * @param maxAttempts maximum generate-critique cycles (default 3)
+ * @param failOnReject if true, fail when the critic never accepts; if false, return the best attempt
  */
 @JsonTypeName("adversarial")
 data class AdversarialExecutorSpec(
@@ -46,6 +47,7 @@ data class AdversarialExecutorSpec(
     val generator: AgentExecutor,
     val criticPrompt: String,
     val maxAttempts: Int = 3,
+    val failOnReject: Boolean = false,
 ) : ActionSpec {
 
     override val stepType: String = "adversarial"
@@ -59,7 +61,7 @@ data class AdversarialExecutorSpec(
             defaultPermissionMode = ClaudeCodePermissionMode.PLAN,
         )
         val critic = AdversarialExecutor.criticFrom(criticExecutor)
-        val adversarial = AdversarialExecutor(generator, critic, maxAttempts)
+        val adversarial = AdversarialExecutor(generator, critic, maxAttempts, failOnReject)
         return adversarial.emit(stepContext)
     }
 }
