@@ -15,7 +15,6 @@
  */
 package com.embabel.agent.claudecode
 
-import com.embabel.agent.executor.FitnessEvaluation
 import com.embabel.agent.executor.TypedResult
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -123,16 +122,13 @@ class TypedExecutionTest {
         val raw = ClaudeCodeResult.Success(result = "raw")
         val result = TypedResult.Success(
             value = SimpleOutput("test", 1),
-            evaluation = FitnessEvaluation(0.95, "looks good"),
+            score = 0.95,
             attempts = 1,
-            costUsd = 0.05,
             raw = raw,
         )
         assertEquals("test", result.value.name)
         assertEquals(0.95, result.score)
         assertEquals(1, result.attempts)
-        assertEquals(0.05, result.costUsd)
-        assertEquals("looks good", result.evaluation.feedback)
     }
 
     @Test

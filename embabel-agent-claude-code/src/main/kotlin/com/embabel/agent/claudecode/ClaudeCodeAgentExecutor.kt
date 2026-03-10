@@ -24,6 +24,7 @@ import com.embabel.agent.sandbox.ExecutionRequest
 import com.embabel.agent.sandbox.ExecutionResult
 import com.embabel.agent.sandbox.SandboxedExecutor
 import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.annotation.JsonTypeName
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
@@ -86,6 +87,7 @@ import kotlin.time.Duration.Companion.minutes
  * @param environment additional environment variables
  * @param sandboxExecutor optional sandbox executor for isolated execution
  */
+@JsonTypeName("agent-executor")
 class ClaudeCodeAgentExecutor(
     override val name: String = "claude-code",
     override val description: String = "Execute a coding task using Claude Code CLI",
@@ -836,26 +838,21 @@ class ClaudeCodeAgentExecutor(
                 }
 
                 // Evaluate fitness
-                val evaluation = request.fitnessFunction(parsed)
-                logger.info(
-                    "Typed execution attempt {}/{}: fitness={} {}",
-                    attempt, maxAttempts, evaluation.score,
-                    evaluation.feedback?.let { "($it)" } ?: "",
-                )
+                val score = request.fitnessFunction(parsed)
+                logger.info("Typed execution attempt {}/{}: fitness score = {}", attempt, maxAttempts, score)
 
                 val candidate = TypedResult.Success(
                     value = parsed,
-                    evaluation = evaluation,
+                    score = score,
                     attempts = attempt,
-                    costUsd = result.costUsd,
                     raw = result,
                 )
 
-                if (bestResult == null || evaluation.score > bestResult.score) {
+                if (bestResult == null || score > bestResult.score) {
                     bestResult = candidate
                 }
 
-                if (evaluation.score >= request.fitnessThreshold) {
+                if (score >= request.fitnessThreshold) {
                     return bestResult
                 }
             }

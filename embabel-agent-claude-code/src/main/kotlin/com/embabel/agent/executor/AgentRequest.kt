@@ -31,7 +31,7 @@ import com.embabel.common.core.types.ZeroToOne
 data class AgentRequest<T>(
     val prompt: () -> String,
     val outputClass: Class<T>,
-    val fitnessFunction: FitnessFunction<T> = FitnessFunctions.alwaysPass(),
+    val fitnessFunction: FitnessFunction<T> = { 1.0 },
     val tools: List<Tool> = emptyList(),
     val maxRetries: Int = 0,
     val fitnessThreshold: ZeroToOne = 0.8,
