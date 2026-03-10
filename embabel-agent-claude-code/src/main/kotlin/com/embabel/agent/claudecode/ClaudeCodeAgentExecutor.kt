@@ -836,21 +836,26 @@ class ClaudeCodeAgentExecutor(
                 }
 
                 // Evaluate fitness
-                val score = request.fitnessFunction(parsed)
-                logger.info("Typed execution attempt {}/{}: fitness score = {}", attempt, maxAttempts, score)
+                val evaluation = request.fitnessFunction(parsed)
+                logger.info(
+                    "Typed execution attempt {}/{}: fitness={} {}",
+                    attempt, maxAttempts, evaluation.score,
+                    evaluation.feedback?.let { "($it)" } ?: "",
+                )
 
                 val candidate = TypedResult.Success(
                     value = parsed,
-                    score = score,
+                    evaluation = evaluation,
                     attempts = attempt,
+                    costUsd = result.costUsd,
                     raw = result,
                 )
 
-                if (bestResult == null || score > bestResult.score) {
+                if (bestResult == null || evaluation.score > bestResult.score) {
                     bestResult = candidate
                 }
 
-                if (score >= request.fitnessThreshold) {
+                if (evaluation.score >= request.fitnessThreshold) {
                     return bestResult
                 }
             }

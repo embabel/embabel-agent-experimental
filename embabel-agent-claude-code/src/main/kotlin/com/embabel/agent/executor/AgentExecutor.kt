@@ -24,49 +24,105 @@ import com.embabel.agent.spec.model.StepSpecContext
 import com.embabel.common.core.types.ZeroToOne
 
 /**
- * A function that evaluates the quality of a value, returning a score between 0.0 and 1.0.
+ * Result of a fitness evaluation, combining a numeric score
+ * with optional human-readable feedback explaining the rating.
+ *
+ * @param score quality score between 0.0 and 1.0
+ * @param feedback optional explanation of the score (for logging/observability)
  */
-typealias FitnessFunction<T> = (T) -> ZeroToOne
+data class FitnessEvaluation(
+    val score: ZeroToOne,
+    val feedback: String? = null,
+) {
+    companion object {
+        fun pass(feedback: String? = null) = FitnessEvaluation(1.0, feedback)
+        fun fail(feedback: String) = FitnessEvaluation(0.0, feedback)
+        fun of(score: ZeroToOne, feedback: String? = null) = FitnessEvaluation(score, feedback)
+    }
+}
+
+/**
+ * A function that evaluates the quality of a value, returning a [FitnessEvaluation]
+ * with a score between 0.0 and 1.0 and optional feedback.
+ */
+typealias FitnessFunction<T> = (T) -> FitnessEvaluation
 
 /**
  * Combines two fitness functions using minimum (logical AND).
  * Both functions must score high for the combined score to be high.
+ * Feedback from the lower-scoring evaluation is preserved.
  */
-fun <T> FitnessFunction<T>.and(other: FitnessFunction<T>): FitnessFunction<T> =
-    { minOf(this(it), other(it)) }
+fun <T> FitnessFunction<T>.and(other: FitnessFunction<T>): FitnessFunction<T> = {
+    val a = this(it)
+    val b = other(it)
+    if (a.score <= b.score) a else b
+}
 
 /**
  * Combines two fitness functions using maximum (logical OR).
  * Either function scoring high is sufficient.
+ * Feedback from the higher-scoring evaluation is preserved.
  */
-fun <T> FitnessFunction<T>.or(other: FitnessFunction<T>): FitnessFunction<T> =
-    { maxOf(this(it), other(it)) }
+fun <T> FitnessFunction<T>.or(other: FitnessFunction<T>): FitnessFunction<T> = {
+    val a = this(it)
+    val b = other(it)
+    if (a.score >= b.score) a else b
+}
 
 /**
  * Creates a weighted combination of fitness functions.
  * Each function's score is multiplied by its weight and the results are averaged.
+ * Feedback from all evaluations is concatenated.
  */
 fun <T> weightedFitness(vararg weighted: Pair<Double, FitnessFunction<T>>): FitnessFunction<T> = { value ->
-    weighted.sumOf { (weight, fn) -> weight * fn(value) } / weighted.sumOf { it.first }
+    val evaluations = weighted.map { (weight, fn) -> weight to fn(value) }
+    val score = evaluations.sumOf { (weight, eval) -> weight * eval.score } / weighted.sumOf { it.first }
+    val feedback = evaluations.mapNotNull { (_, eval) -> eval.feedback }.joinToString("; ").ifEmpty { null }
+    FitnessEvaluation(score, feedback)
 }
 
 /**
  * Combines multiple fitness functions using minimum (all must pass).
+ * Feedback from the lowest-scoring evaluation is preserved.
  */
 fun <T> allOf(vararg fns: FitnessFunction<T>): FitnessFunction<T> = { value ->
-    fns.minOfOrNull { it(value) } ?: 1.0
+    val evaluations = fns.map { it(value) }
+    evaluations.minByOrNull { it.score } ?: FitnessEvaluation.pass()
 }
 
 /**
  * Common built-in fitness functions.
  */
 object FitnessFunctions {
-    fun <T> alwaysPass(): FitnessFunction<T> = { 1.0 }
-    fun <T> alwaysFail(): FitnessFunction<T> = { 0.0 }
-    fun nonBlank(): FitnessFunction<String> = { if (it.isBlank()) 0.0 else 1.0 }
-    fun minLength(min: Int): FitnessFunction<String> = { if (it.length >= min) 1.0 else it.length.toDouble() / min }
-    fun <T> predicate(fn: (T) -> Boolean): FitnessFunction<T> = { if (fn(it)) 1.0 else 0.0 }
+    fun <T> alwaysPass(): FitnessFunction<T> = { FitnessEvaluation.pass() }
+    fun <T> alwaysFail(): FitnessFunction<T> = { FitnessEvaluation.fail("Always fails") }
+    fun nonBlank(): FitnessFunction<String> = {
+        if (it.isBlank()) FitnessEvaluation.fail("Output is blank")
+        else FitnessEvaluation.pass()
+    }
+    fun minLength(min: Int): FitnessFunction<String> = {
+        if (it.length >= min) FitnessEvaluation.pass()
+        else FitnessEvaluation(it.length.toDouble() / min, "Output too short: ${it.length} < $min")
+    }
+    fun <T> predicate(description: String = "Predicate failed", fn: (T) -> Boolean): FitnessFunction<T> = {
+        if (fn(it)) FitnessEvaluation.pass()
+        else FitnessEvaluation.fail(description)
+    }
 }
+
+/**
+ * Outcome of an agent execution, providing the output value
+ * along with cost and attempt metadata for fitness evaluation.
+ *
+ * @param output the result value produced by the execution
+ * @param costUsd total cost of the execution in USD
+ * @param attempts number of attempts made so far
+ */
+data class ExecutionOutcome(
+    val output: Any,
+    val costUsd: Double = 0.0,
+    val attempts: Int = 1,
+)
 
 /**
  * Result of a typed execution with fitness evaluation.
@@ -77,16 +133,30 @@ sealed interface TypedResult<T> {
      * Successful typed execution.
      *
      * @param value the deserialized output
-     * @param score the fitness score of the output
+     * @param evaluation the fitness evaluation of the output
      * @param attempts number of attempts made
+     * @param costUsd cost of the execution in USD
      * @param raw the underlying raw result
      */
     data class Success<T>(
         val value: T,
-        val score: ZeroToOne,
-        val attempts: Int,
-        val raw: Any?,
-    ) : TypedResult<T>
+        val evaluation: FitnessEvaluation = FitnessEvaluation.pass(),
+        val attempts: Int = 1,
+        val costUsd: Double = 0.0,
+        val raw: Any? = null,
+    ) : TypedResult<T> {
+
+        val score: ZeroToOne get() = evaluation.score
+
+        /**
+         * Convert to an [ExecutionOutcome] for fitness evaluation.
+         */
+        fun toOutcome(): ExecutionOutcome = ExecutionOutcome(
+            output = value as Any,
+            costUsd = costUsd,
+            attempts = attempts,
+        )
+    }
 
     /**
      * Failed typed execution (CLI failure, parse failure, or all retries exhausted below threshold).
@@ -124,6 +194,25 @@ interface AgentExecutor : ActionSpec {
     val outputTypeName: String
 
     /**
+     * Fitness function that evaluates the [ExecutionOutcome] after each attempt.
+     * Has access to the output value, cost, and attempt count.
+     * Defaults to always passing (score 1.0).
+     */
+    val resultFitness: FitnessFunction<ExecutionOutcome> get() = FitnessFunctions.alwaysPass()
+
+    /**
+     * Maximum number of retry attempts when fitness is below [fitnessThreshold].
+     * 0 means no retries (single attempt only).
+     */
+    val maxRetries: Int get() = 0
+
+    /**
+     * Minimum acceptable fitness score. Results below this trigger a retry
+     * if [maxRetries] allows.
+     */
+    val fitnessThreshold: ZeroToOne get() = 0.8
+
+    /**
      * Execute a typed request with fitness evaluation and optional retry.
      */
     fun <T : Any> executeTyped(request: AgentRequest<T>): TypedResult<T>
@@ -147,6 +236,9 @@ interface AgentExecutor : ActionSpec {
 
 /**
  * Action that delegates execution to an [AgentExecutor].
+ * Runs a fitness-evaluated retry loop using the executor's
+ * [AgentExecutor.resultFitness], [AgentExecutor.maxRetries],
+ * and [AgentExecutor.fitnessThreshold].
  */
 private class AgentExecutorAction(
     private val executor: AgentExecutor,
@@ -184,13 +276,55 @@ private class AgentExecutorAction(
                 tools = resolvedTools,
             )
 
-            when (val result = executor.executeTyped(request)) {
-                is TypedResult.Success ->
-                    processContext.blackboard[varName] = result.value
+            val maxAttempts = 1 + executor.maxRetries
+            var bestResult: TypedResult.Success<String>? = null
 
-                is TypedResult.Failure ->
-                    throw RuntimeException("Agent execution failed: ${result.error}")
+            for (attempt in 1..maxAttempts) {
+                when (val result = executor.executeTyped(request)) {
+                    is TypedResult.Success -> {
+                        val outcome = result.toOutcome()
+                        val evaluation = executor.resultFitness(outcome)
+
+                        logger.info(
+                            "Executor '{}' attempt {}/{}: fitness={} {}",
+                            executor.name, attempt, maxAttempts, evaluation.score,
+                            evaluation.feedback?.let { "($it)" } ?: "",
+                        )
+
+                        val evaluated = result.copy(evaluation = evaluation)
+                        if (bestResult == null || evaluation.score > bestResult.score) {
+                            bestResult = evaluated
+                        }
+
+                        if (evaluation.score >= executor.fitnessThreshold) {
+                            break
+                        }
+                    }
+
+                    is TypedResult.Failure -> {
+                        logger.warn(
+                            "Executor '{}' attempt {}/{} failed: {}",
+                            executor.name, attempt, maxAttempts, result.error,
+                        )
+                        if (bestResult == null && attempt == maxAttempts) {
+                            throw RuntimeException("Agent execution failed: ${result.error}")
+                        }
+                    }
+                }
             }
+
+            val finalResult = bestResult
+                ?: throw RuntimeException("Agent execution failed: all $maxAttempts attempts failed")
+
+            if (finalResult.score < executor.fitnessThreshold) {
+                logger.warn(
+                    "Executor '{}' best fitness {} below threshold {} after {} attempts. {}",
+                    executor.name, finalResult.score, executor.fitnessThreshold, maxAttempts,
+                    finalResult.evaluation.feedback ?: "",
+                )
+            }
+
+            processContext.blackboard[varName] = finalResult.value
         }
     }
 
