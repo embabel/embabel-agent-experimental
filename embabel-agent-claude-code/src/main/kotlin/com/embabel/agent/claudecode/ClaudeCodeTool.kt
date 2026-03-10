@@ -28,21 +28,8 @@ import java.nio.file.Paths
  * which can read, edit, and create files, run commands, and perform
  * multi-step coding operations.
  *
- * ## Example Usage
- *
- * An LLM might invoke this tool with:
- * ```json
- * {
- *   "prompt": "Add comprehensive unit tests for the UserService class",
- *   "workingDirectory": "/path/to/project"
- * }
- * ```
- *
- * ## Security Considerations
- *
- * This tool executes Claude Code with the permissions configured in the executor.
- * By default, it uses ACCEPT_EDITS mode which will automatically approve file edits.
- * Consider restricting allowed tools for sensitive environments.
+ * Extends the generic agent executor tool pattern with Claude Code-specific
+ * parameters (allowed tools, working directory).
  *
  * @param executor the Claude Code executor to use
  * @param defaultWorkingDirectory default working directory if not specified in the call
@@ -108,7 +95,7 @@ class ClaudeCodeTool(
             maxTurns = maxTurns,
         )
 
-        return formatResult(result)
+        return result.toToolResult()
     }
 
     private fun parseInput(input: String): ClaudeCodeInput {
@@ -130,57 +117,6 @@ class ClaudeCodeTool(
         }
     }
 
-    private fun formatResult(result: ClaudeCodeResult): Tool.Result = when (result) {
-        is ClaudeCodeResult.Success -> {
-            val output = buildString {
-                appendLine("Claude Code completed successfully")
-                if (result.numTurns > 0) {
-                    appendLine("Turns: ${result.numTurns}")
-                }
-                if (result.costUsd > 0) {
-                    appendLine("Cost: $${String.format("%.4f", result.costUsd)}")
-                }
-                result.duration?.let { appendLine("Duration: $it") }
-                appendLine()
-                appendLine("=== Result ===")
-                appendLine(result.result)
-
-                if (result.allAffectedFiles.isNotEmpty()) {
-                    appendLine()
-                    appendLine("=== Affected Files ===")
-                    result.allAffectedFiles.forEach { appendLine("- $it") }
-                }
-            }
-
-            // Return with artifact for potential blackboard integration
-            Tool.Result.withArtifact(output.trim(), result)
-        }
-
-        is ClaudeCodeResult.Failure -> {
-            val message = buildString {
-                append("Claude Code failed: ${result.error}")
-                if (result.timedOut) {
-                    append(" (timed out)")
-                }
-                result.exitCode?.let { append(" [exit code: $it]") }
-                result.duration?.let { append(" [ran for: $it]") }
-                if (!result.stderr.isNullOrBlank()) {
-                    appendLine()
-                    appendLine("=== stderr ===")
-                    appendLine(result.stderr.trim())
-                }
-            }
-            Tool.Result.error(message.trim())
-        }
-
-        is ClaudeCodeResult.Denied -> {
-            Tool.Result.error("Claude Code execution denied: ${result.reason}")
-        }
-    }
-
-    /**
-     * Input parameters for Claude Code tool invocation.
-     */
     private data class ClaudeCodeInput(
         val prompt: String,
         val workingDirectory: String? = null,
@@ -189,10 +125,8 @@ class ClaudeCodeTool(
     )
 
     companion object {
-        /** Default maximum turns to prevent runaway executions */
         const val DEFAULT_MAX_TURNS = 20
 
-        /** Default allowed tools - a reasonable set for most coding tasks */
         val DEFAULT_ALLOWED_TOOLS = listOf(
             ClaudeCodeAllowedTool.READ,
             ClaudeCodeAllowedTool.EDIT,
@@ -202,7 +136,6 @@ class ClaudeCodeTool(
             ClaudeCodeAllowedTool.GREP,
         )
 
-        /** Default description for the tool */
         const val DEFAULT_DESCRIPTION = """Execute agentic coding tasks using Claude Code.
 
 Claude Code is an AI-powered coding assistant that can:
@@ -216,9 +149,6 @@ Use this tool for complex coding tasks that require multiple steps or
 understanding of the codebase context. Provide specific, detailed prompts
 for best results."""
 
-        /**
-         * Create a read-only tool that can explore but not modify code.
-         */
         fun readOnly(
             executor: ClaudeCodeAgentExecutor = ClaudeCodeAgentExecutor(),
             defaultWorkingDirectory: Path? = null,
@@ -238,4 +168,44 @@ but cannot make any modifications. Use this for research and understanding
 tasks where no changes should be made.""",
         )
     }
+}
+
+/**
+ * Format a [ClaudeCodeResult] as a [Tool.Result].
+ */
+fun ClaudeCodeResult.toToolResult(): Tool.Result = when (this) {
+    is ClaudeCodeResult.Success -> {
+        val output = buildString {
+            appendLine("Completed successfully")
+            if (numTurns > 0) appendLine("Turns: $numTurns")
+            if (costUsd > 0) appendLine("Cost: $${String.format("%.4f", costUsd)}")
+            duration?.let { appendLine("Duration: $it") }
+            appendLine()
+            appendLine("=== Result ===")
+            appendLine(result)
+            if (allAffectedFiles.isNotEmpty()) {
+                appendLine()
+                appendLine("=== Affected Files ===")
+                allAffectedFiles.forEach { appendLine("- $it") }
+            }
+        }
+        Tool.Result.withArtifact(output.trim(), this)
+    }
+
+    is ClaudeCodeResult.Failure -> {
+        val message = buildString {
+            append("Failed: $error")
+            if (timedOut) append(" (timed out)")
+            exitCode?.let { append(" [exit code: $it]") }
+            duration?.let { append(" [ran for: $it]") }
+            if (!stderr.isNullOrBlank()) {
+                appendLine()
+                appendLine("=== stderr ===")
+                appendLine(stderr.trim())
+            }
+        }
+        Tool.Result.error(message.trim())
+    }
+
+    is ClaudeCodeResult.Denied -> Tool.Result.error("Execution denied: $reason")
 }

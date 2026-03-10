@@ -31,6 +31,12 @@
             <version>${project.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-spec</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- JSON Parsing -->
         <dependency>
             <groupId>com.fasterxml.jackson.module</groupId>

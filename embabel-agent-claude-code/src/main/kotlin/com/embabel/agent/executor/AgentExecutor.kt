@@ -15,6 +15,12 @@
  */
 package com.embabel.agent.executor
 
+import com.embabel.agent.api.common.OperationContext
+import com.embabel.agent.core.*
+import com.embabel.agent.core.support.AbstractAction
+import com.embabel.agent.domain.io.UserInput
+import com.embabel.agent.spec.model.ActionSpec
+import com.embabel.agent.spec.model.StepSpecContext
 import com.embabel.common.core.types.ZeroToOne
 
 /**
@@ -97,16 +103,95 @@ sealed interface TypedResult<T> {
 /**
  * Interface for typed agent execution with fitness evaluation.
  *
- * Implementations handle the full flow of executing a prompt, parsing structured output,
- * evaluating fitness, and optionally retrying.
+ * Also implements [ActionSpec], so any agent executor can emit an [Action]
+ * from a [StepSpecContext]. The default [emit] creates an action that
+ * resolves tools from the context and delegates execution to [executeTyped].
+ *
+ * Implementations must provide [name], [description], [prompt],
+ * [inputTypeNames], and [outputTypeName].
  */
-interface AgentExecutor {
+interface AgentExecutor : ActionSpec {
+
+    /** Prompt template (supports {{variable}} syntax) for the task */
+    val prompt: String
+
+    /** Input type names to bind from the blackboard */
+    val inputTypeNames: Set<String>
+
+    /** Output type name to write to the blackboard */
+    val outputTypeName: String
+
+    override val stepType: String get() = "agent-executor"
 
     /**
      * Execute a typed request with fitness evaluation and optional retry.
-     *
-     * @param request the typed agent request
-     * @return the typed result with fitness score
      */
     fun <T : Any> executeTyped(request: AgentRequest<T>): TypedResult<T>
+
+    /**
+     * Emit an [Action] that delegates to this executor.
+     * Tools from the [StepSpecContext] are passed to the executor via the [AgentRequest].
+     */
+    override fun emit(stepContext: StepSpecContext): Action {
+        val varName = outputTypeName.substringAfterLast('.').decapitalize()
+        val inputs = inputTypeNames.map { IoBinding(variableNameFor(it), it) }.toSet()
+        val resolvedTools = stepContext.tools
+
+        return object : AbstractAction(
+            name = this@AgentExecutor.name,
+            description = this@AgentExecutor.description,
+            inputs = inputs,
+            outputs = setOf(IoBinding(varName, outputTypeName)),
+            toolGroups = emptySet(),
+            canRerun = false,
+        ) {
+            override val domainTypes: Collection<DomainType> = stepContext.dataDictionary.domainTypes
+
+            override fun execute(processContext: ProcessContext): ActionStatus {
+                val action = this
+                return ActionRunner.execute(processContext) {
+                    val context = OperationContext(
+                        processContext = processContext,
+                        operation = action,
+                        toolGroups = emptySet(),
+                    )
+                    val templateModel = buildTemplateModel(processContext, inputs)
+                    val renderedPrompt = context.agentPlatform()
+                        .platformServices.templateRenderer
+                        .renderLiteralTemplate(this@AgentExecutor.prompt, templateModel)
+
+                    val request = AgentRequest(
+                        prompt = { renderedPrompt },
+                        outputClass = String::class.java,
+                        tools = resolvedTools,
+                    )
+
+                    when (val result = executeTyped(request)) {
+                        is TypedResult.Success ->
+                            processContext.blackboard[varName] = result.value
+
+                        is TypedResult.Failure ->
+                            throw RuntimeException("Agent execution failed: ${result.error}")
+                    }
+                }
+            }
+
+            override fun referencedInputProperties(variable: String): Set<String> = emptySet()
+        }
+    }
+}
+
+private fun variableNameFor(typeName: String): String =
+    typeName.substringAfterLast('.').decapitalize()
+
+private fun buildTemplateModel(processContext: ProcessContext, inputs: Set<IoBinding>): Map<String, Any> {
+    val model = mutableMapOf<String, Any>()
+    model.putAll(processContext.blackboard.expressionEvaluationModel())
+    for (input in inputs) {
+        val value = processContext.blackboard[input.name]
+            ?: throw IllegalArgumentException("Input variable '${input.name}' not found in process context.")
+        model[input.name] = value
+    }
+    processContext.blackboard.last<UserInput>()?.let { model["userInput"] = it }
+    return model
 }

@@ -30,9 +30,11 @@ import java.io.File
 /**
  * Look for YML files in a directory to load and save StepDefinition entities
  * @param dir Directory to load/save YML files
+ * @param additionalSubtypes additional [StepSpec] subtypes to register for deserialization
  */
 class YmlStepSpecRepository(
     val dir: String,
+    additionalSubtypes: List<Class<out StepSpec<*>>> = emptyList(),
 ) : StepSpecRepository {
 
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -43,6 +45,9 @@ class YmlStepSpecRepository(
         registerKotlinModule()
         enable(SerializationFeature.INDENT_OUTPUT)
         disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+        if (additionalSubtypes.isNotEmpty()) {
+            registerSubtypes(*additionalSubtypes.toTypedArray())
+        }
     }
 
     override fun save(entity: StepSpec<*>): StepSpec<*> {

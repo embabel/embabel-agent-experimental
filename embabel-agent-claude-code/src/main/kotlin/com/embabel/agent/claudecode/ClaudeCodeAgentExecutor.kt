@@ -85,6 +85,11 @@ import kotlin.time.Duration.Companion.minutes
  * @param sandboxExecutor optional sandbox executor for isolated execution
  */
 class ClaudeCodeAgentExecutor(
+    override val name: String = "claude-code",
+    override val description: String = "Execute a coding task using Claude Code CLI",
+    override val prompt: String = "{{userInput}}",
+    override val inputTypeNames: Set<String> = emptySet(),
+    override val outputTypeName: String = "String",
     private val claudeCommand: String = "claude",
     private val defaultTimeout: Duration = 10.minutes,
     private val defaultPermissionMode: ClaudeCodePermissionMode = ClaudeCodePermissionMode.ACCEPT_EDITS,
