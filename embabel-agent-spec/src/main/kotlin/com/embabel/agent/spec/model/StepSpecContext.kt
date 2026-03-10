@@ -17,7 +17,6 @@ package com.embabel.agent.spec.model
 
 import com.embabel.agent.api.reference.LlmReference
 import com.embabel.agent.api.tool.Tool
-import com.embabel.agent.api.tool.ToolInfo
 import com.embabel.agent.core.DataDictionary
 import com.embabel.agent.core.ToolGroupDescription
 
@@ -28,7 +27,6 @@ data class StepSpecContext(
     val name: String,
     val dataDictionary: DataDictionary,
     val toolGroups: List<ToolGroupDescription>,
-    val tools: List<ToolInfo>,
-    val availableTools: List<Tool> = emptyList(),
+    val tools: List<Tool> = emptyList(),
     val availableReferences: List<LlmReference> = emptyList(),
 )

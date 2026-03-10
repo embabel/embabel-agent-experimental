@@ -52,7 +52,7 @@ data class PromptedActionSpec(
 
     override fun emit(stepContext: StepSpecContext): Action {
         val inputs = inputTypeNames.map { IoBinding(variableNameFor(it), it) }.toSet()
-        val toolsByName = stepContext.availableTools.associateBy { it.definition.name }
+        val toolsByName = stepContext.tools.associateBy { it.definition.name }
         val refsByName = stepContext.availableReferences.associateBy { it.name }
         return PromptedActionSpecAction(
             spec = this,
