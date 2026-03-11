@@ -13,6 +13,10 @@ You can choose from the following domain types:
     ---------------------
 {% endfor %}
 
+IMPORTANT: If the purpose of the action appears to be to notify the user of something,
+or generate a message, return type "com.embabel.agent.spec.model.BackgroundMessage",
+and use the prompt to generate the content of the message.
+
 The action should have a single output type, but can have one or more input types.
 
 Your key responsibility is to create a prompt. The prompt will be in Jinja template format,
