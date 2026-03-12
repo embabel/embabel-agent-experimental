@@ -83,6 +83,22 @@ class OpenApiOperationToolTest {
         }
 
         @Test
+        fun `sanitizes dots in synthesized path names`() {
+            val op = Operation()
+            val name = OpenApiOperationTool.operationName(PathItem.HttpMethod.GET, "/info.0.json", op)
+            assertTrue(name.matches(Regex("^[a-zA-Z0-9_-]+$")), "Name '$name' contains invalid characters")
+            assertEquals("get_info_0_json", name)
+        }
+
+        @Test
+        fun `sanitizes dots in synthesized path with parameters`() {
+            val op = Operation()
+            val name = OpenApiOperationTool.operationName(PathItem.HttpMethod.GET, "/{comicId}/info.0.json", op)
+            assertTrue(name.matches(Regex("^[a-zA-Z0-9_-]+$")), "Name '$name' contains invalid characters")
+            assertEquals("get_by_comicId_info_0_json", name)
+        }
+
+        @Test
         fun `synthesizes name with path parameters`() {
             val op = Operation()
             assertEquals(
@@ -98,6 +114,22 @@ class OpenApiOperationToolTest {
                 "post_pets_by_petId_uploadImage",
                 OpenApiOperationTool.operationName(PathItem.HttpMethod.POST, "/pets/{petId}/uploadImage", op),
             )
+        }
+
+        @Test
+        fun `sanitizes operationId with dots and slashes`() {
+            val op = Operation().apply { operationId = "get/info.0.json" }
+            val name = OpenApiOperationTool.operationName(PathItem.HttpMethod.GET, "/info.0.json", op)
+            assertTrue(name.matches(Regex("^[a-zA-Z0-9_-]+$")), "Name '$name' contains invalid characters")
+            assertEquals("get_info_0_json", name)
+        }
+
+        @Test
+        fun `sanitizes operationId with special characters`() {
+            val op = Operation().apply { operationId = "my.api:operation#1" }
+            val name = OpenApiOperationTool.operationName(PathItem.HttpMethod.GET, "/test", op)
+            assertTrue(name.matches(Regex("^[a-zA-Z0-9_-]+$")), "Name '$name' contains invalid characters")
+            assertEquals("my_api_operation_1", name)
         }
 
         @Test

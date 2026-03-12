@@ -15,6 +15,7 @@
  */
 package com.embabel.agent.api.client.openapi
 
+import com.embabel.agent.api.client.ToolNames
 import com.embabel.agent.api.tool.Tool
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -165,10 +166,10 @@ class OpenApiOperationTool(
         ): String {
             // Prefer operationId if available
             if (!operation.operationId.isNullOrBlank()) {
-                return operation.operationId
+                return ToolNames.sanitize(operation.operationId)
             }
             // Synthesize from method + path: GET /pets/{petId} → get_pets_by_petId
-            val sanitized = path
+            val synthesized = path
                 .replace("{", "by_")
                 .replace("}", "")
                 .replace("/", "_")
@@ -176,7 +177,7 @@ class OpenApiOperationTool(
                 .trimStart('_')
                 .trimEnd('_')
                 .replace("__", "_")
-            return "${httpMethod.name.lowercase()}_$sanitized"
+            return ToolNames.sanitize("${httpMethod.name.lowercase()}_$synthesized")
         }
 
         internal fun operationDescription(operation: Operation): String {
