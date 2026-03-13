@@ -171,6 +171,70 @@ class OpenApiLearnerLiveTest {
         assertTrue((result as Tool.Result.Text).content.contains("uuid"))
     }
 
+    // --- XKCD (OpenAPI 3.0, no auth, dots in paths) ---
+
+    private val xkcdSpec = "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/xkcd.com/1.0.0/openapi.yaml"
+
+    @Test
+    fun `xkcd - inspect`() {
+        val learned = learner.learn(xkcdSpec)
+        println("Name: ${learned.name}")
+        println("Description: ${learned.description}")
+        println("Auth: ${learned.authRequirements}")
+        assertEquals("xkcd", learned.name)
+    }
+
+    @Test
+    fun `xkcd - tool names are valid`() {
+        val tool = learner.learn(xkcdSpec).create()
+        val allTools = collectAllLeafTools(tool)
+        val validPattern = Regex("^[a-zA-Z0-9_-]+$")
+        allTools.forEach {
+            assertTrue(it.definition.name.matches(validPattern)) {
+                "Tool name '${it.definition.name}' contains invalid characters"
+            }
+        }
+        println("XKCD tools: ${allTools.map { it.definition.name }}")
+    }
+
+    @Test
+    fun `xkcd - tool tree`() {
+        val tool = learner.learn(xkcdSpec).create()
+        println(Tool.formatToolTree("xkcd", listOf(tool)))
+        assertInstanceOf(ProgressiveTool::class.java, tool)
+    }
+
+    @Test
+    fun `xkcd - GET current comic`() {
+        val tool = learner.learn(xkcdSpec).create()
+        val allTools = collectAllLeafTools(tool)
+        val currentTool = allTools.find { it.definition.name.contains("info_0_json") && !it.definition.name.contains("comicId") }
+        assertNotNull(currentTool) {
+            "No current comic tool found. Available: ${allTools.map { it.definition.name }}"
+        }
+        val result = currentTool!!.call("")
+        assertSuccess(result, currentTool.definition.name)
+        val text = (result as Tool.Result.Text).content
+        assertTrue(text.contains("title")) { "Expected comic JSON with 'title' field" }
+        assertTrue(text.contains("img")) { "Expected comic JSON with 'img' field" }
+        assertTrue(text.contains("num")) { "Expected comic JSON with 'num' field" }
+    }
+
+    @Test
+    fun `xkcd - GET comic by id`() {
+        val tool = learner.learn(xkcdSpec).create()
+        val allTools = collectAllLeafTools(tool)
+        val byIdTool = allTools.find { it.definition.name.contains("comicId") }
+        assertNotNull(byIdTool) {
+            "No comic-by-id tool found. Available: ${allTools.map { it.definition.name }}"
+        }
+        // Fetch comic #327 (exploits of a mom)
+        val result = byIdTool!!.call("""{"comicId": "327"}""")
+        assertSuccess(result, byIdTool.definition.name)
+        val text = (result as Tool.Result.Text).content
+        assertTrue(text.contains("327") || text.contains("num")) { "Expected comic 327 data" }
+    }
+
     // --- Helpers ---
 
     private fun callTool(root: Tool, name: String, input: String): Tool.Result? {

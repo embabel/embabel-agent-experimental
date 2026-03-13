@@ -103,7 +103,11 @@ class OpenApiLearner : ApiLearner {
         openApi: OpenAPI,
         credentials: ApiCredentials,
     ): RestClient {
-        val builder = RestClient.builder()
+        val httpClient = java.net.http.HttpClient.newBuilder()
+            .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+            .build()
+        val requestFactory = org.springframework.http.client.JdkClientHttpRequestFactory(httpClient)
+        val builder = RestClient.builder().requestFactory(requestFactory)
         applyCredentials(builder, openApi, credentials)
         return builder.build()
     }
