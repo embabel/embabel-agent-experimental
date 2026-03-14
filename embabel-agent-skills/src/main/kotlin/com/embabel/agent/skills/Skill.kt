@@ -259,6 +259,41 @@ data class Skills @JvmOverloads constructor(
             ?: "File not found: '$fileName' in $resourceType for skill '$skillName'"
     }
 
+    /**
+     * Return each loaded skill as its own [LlmReference], each wrapping
+     * with [withUnfolding] so the LLM sees one top-level tool per skill
+     * that unfolds into that skill's tools (activate, listResources, readResource, scripts).
+     *
+     * This gives the LLM a clear per-skill entry point instead of a single
+     * monolithic "skills" tool containing everything.
+     *
+     * The returned references share this [Skills] instance for tool execution
+     * (activate, listResources, readResource) so all state is consistent.
+     */
+    fun asIndividualReferences(): List<LlmReference> {
+        if (skills.isEmpty()) return emptyList()
+        return skills.map { skill ->
+            val perSkillTools = buildList {
+                // The shared activate/listResources/readResource tools (bound to this Skills instance)
+                addAll(Tool.fromInstance(this@Skills))
+                // Script tools specific to this skill
+                addAll(skill.getScriptTools(scriptExecutionEngine))
+            }
+            LlmReference.of(
+                name = skill.name,
+                description = skill.description,
+                tools = perSkillTools,
+                notes = """
+                    Skill: ${skill.name}
+                    ${skill.description}
+
+                    To use this skill, call activate with name "${skill.name}" to get full instructions.
+                    Use listResources and readResource to access the skill's bundled resources.
+                """.trimIndent(),
+            ).withUnfolding()
+        }
+    }
+
     private fun findSkill(name: String): LoadedSkill? {
         return skills.find { it.name.equals(name, ignoreCase = true) }
     }

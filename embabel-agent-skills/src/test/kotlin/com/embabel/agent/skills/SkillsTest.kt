@@ -454,6 +454,66 @@ class SkillsTest {
         assertTrue(toolNames.contains("skill-2_test"))
     }
 
+    // asIndividualReferences() tests
+
+    @Test
+    fun `asIndividualReferences returns one reference per skill`() {
+        val skillDir1 = createSkillDirectory("skill-a")
+        val skillDir2 = createSkillDirectory("skill-b")
+        val skills = Skills(
+            name = "test",
+            description = "test",
+            skills = listOf(
+                LoadedSkill(
+                    skillMetadata = SkillDefinition(name = "skill-a", description = "First skill"),
+                    basePath = skillDir1,
+                ),
+                LoadedSkill(
+                    skillMetadata = SkillDefinition(name = "skill-b", description = "Second skill"),
+                    basePath = skillDir2,
+                ),
+            ),
+        )
+
+        val refs = skills.asIndividualReferences()
+
+        assertEquals(2, refs.size)
+        assertEquals("skill-a", refs[0].name)
+        assertEquals("First skill", refs[0].description)
+        assertEquals("skill-b", refs[1].name)
+        assertEquals("Second skill", refs[1].description)
+    }
+
+    @Test
+    fun `asIndividualReferences returns empty list when no skills`() {
+        val skills = Skills(name = "test", description = "test", skills = emptyList())
+
+        val refs = skills.asIndividualReferences()
+
+        assertTrue(refs.isEmpty())
+    }
+
+    @Test
+    fun `asIndividualReferences each reference has tools`() {
+        val skillDir = createSkillDirectory("my-skill")
+        val skills = Skills(
+            name = "test",
+            description = "test",
+            skills = listOf(
+                LoadedSkill(
+                    skillMetadata = SkillDefinition(name = "my-skill", description = "A skill"),
+                    basePath = skillDir,
+                ),
+            ),
+        )
+
+        val refs = skills.asIndividualReferences()
+        val tools = refs[0].tools()
+
+        // Should have tools (at minimum the unfolding wrapper)
+        assertTrue(tools.isNotEmpty(), "Each skill reference should have tools")
+    }
+
     // Helper methods
 
     private fun createSkillDirectory(name: String): Path {
