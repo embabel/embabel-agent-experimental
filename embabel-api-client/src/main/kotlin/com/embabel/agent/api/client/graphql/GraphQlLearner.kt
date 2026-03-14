@@ -223,6 +223,7 @@ class GraphQlLearner(
                 @Suppress("UNCHECKED_CAST")
                 val fields = type["fields"] as? List<Map<String, Any?>> ?: return emptyList()
                 fields.mapNotNull { parseField(it) }
+                    .filter { !it.name.startsWith("_") }
             } catch (e: Exception) {
                 logger.info("Full introspection failed for {}, falling back to shallow queries: {}", typeName, e.message)
                 introspectFieldsShallow(endpoint, typeName, restClient, objectMapper)
@@ -256,6 +257,7 @@ class GraphQlLearner(
 
             return returnFields.mapNotNull { field ->
                 val name = field["name"] as? String ?: return@mapNotNull null
+                if (name.startsWith("_")) return@mapNotNull null
                 val description = field["description"] as? String
                 @Suppress("UNCHECKED_CAST")
                 val type = parseTypeRef(field["type"] as? Map<String, Any?>) ?: return@mapNotNull null
@@ -334,10 +336,14 @@ class GraphQlLearner(
             returnType: GraphQlTypeRef,
             restClient: RestClient,
             objectMapper: ObjectMapper,
+            depth: Int = 0,
+            visited: Set<String> = emptySet(),
         ): String {
+            if (depth > 2) return ""
             val typeName = returnType.leafName() ?: return ""
             val kind = returnType.leafKind()
             if (kind == "SCALAR" || kind == "ENUM") return ""
+            if (typeName in visited) return ""
 
             return try {
                 val data = executeGraphQl(endpoint, GraphQlIntrospection.scalarFieldsQuery(typeName), restClient, objectMapper)
@@ -346,14 +352,31 @@ class GraphQlLearner(
                 @Suppress("UNCHECKED_CAST")
                 val fields = type["fields"] as? List<Map<String, Any?>> ?: return ""
 
-                val scalarFields = fields.filter { field ->
-                    @Suppress("UNCHECKED_CAST")
-                    val fieldType = field["type"] as? Map<String, Any?>
-                    val leafKind = parseTypeRef(fieldType)?.leafKind()
-                    leafKind == "SCALAR" || leafKind == "ENUM"
-                }.mapNotNull { it["name"] as? String }
+                val fieldSelections = mutableListOf<String>()
+                val nextVisited = visited + typeName
 
-                if (scalarFields.isEmpty()) "" else "{ ${scalarFields.joinToString(" ")} }"
+                for (field in fields) {
+                    val fieldName = field["name"] as? String ?: continue
+                    if (fieldName.startsWith("_")) continue
+                    @Suppress("UNCHECKED_CAST")
+                    val fieldTypeRef = parseTypeRef(field["type"] as? Map<String, Any?>) ?: continue
+                    val leafKind = fieldTypeRef.leafKind()
+
+                    when (leafKind) {
+                        "SCALAR", "ENUM" -> fieldSelections.add(fieldName)
+                        "OBJECT" -> {
+                            val nestedSelection = buildSelectionSet(
+                                endpoint, fieldTypeRef, restClient, objectMapper,
+                                depth + 1, nextVisited,
+                            )
+                            if (nestedSelection.isNotEmpty()) {
+                                fieldSelections.add("$fieldName $nestedSelection")
+                            }
+                        }
+                    }
+                }
+
+                if (fieldSelections.isEmpty()) "" else "{ ${fieldSelections.joinToString(" ")} }"
             } catch (e: Exception) {
                 logger.warn("Failed to build selection set for {}: {}", typeName, e.message)
                 ""

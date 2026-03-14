@@ -95,12 +95,14 @@ class GraphQlOperationTool(
 
     private fun buildInputSchema(): Tool.InputSchema {
         val parameters = field.args.map { arg ->
+            val paramType = mapGraphQlType(arg.type)
             Tool.Parameter(
                 name = arg.name,
-                type = mapGraphQlType(arg.type),
+                type = paramType,
                 description = arg.description ?: arg.name,
                 required = arg.type.isNonNull(),
                 enumValues = null,
+                itemType = if (paramType == Tool.ParameterType.ARRAY) mapGraphQlItemType(arg.type) else null,
             )
         }
         return Tool.InputSchema.of(*parameters.toTypedArray())
@@ -163,6 +165,27 @@ class GraphQlOperationTool(
                 else -> Tool.ParameterType.STRING
             }.let { baseType ->
                 if (type.isList()) Tool.ParameterType.ARRAY else baseType
+            }
+        }
+
+        /**
+         * For LIST types, determine the item type of the array elements.
+         * Unwraps NON_NULL and LIST wrappers to find the inner element type.
+         */
+        internal fun mapGraphQlItemType(type: GraphQlTypeRef): Tool.ParameterType {
+            val inner = unwrapToListElement(type)
+            return if (inner != null) {
+                mapGraphQlType(inner)
+            } else {
+                Tool.ParameterType.STRING
+            }
+        }
+
+        private fun unwrapToListElement(type: GraphQlTypeRef): GraphQlTypeRef? {
+            return when (type.kind) {
+                "LIST" -> type.ofType
+                "NON_NULL" -> type.ofType?.let { unwrapToListElement(it) }
+                else -> null
             }
         }
 

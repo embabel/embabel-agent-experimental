@@ -31,9 +31,10 @@ object ToolNames {
      * Replaces invalid characters with underscores and collapses runs of underscores.
      */
     fun sanitize(name: String): String {
-        return name
+        val sanitized = name
             .replace(INVALID_CHARS, "_")
             .replace(CONSECUTIVE_UNDERSCORES, "_")
             .trim('_')
+        return sanitized.ifEmpty { "unnamed_tool" }
     }
 }
