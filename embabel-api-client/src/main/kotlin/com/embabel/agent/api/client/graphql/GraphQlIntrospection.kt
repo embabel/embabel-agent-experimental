@@ -27,8 +27,18 @@ object GraphQlIntrospection {
     /**
      * Query to discover root type names.
      */
-    val SCHEMA_QUERY = """
+    /**
+     * Schema query including description (GraphQL June 2018+ spec).
+     */
+    val SCHEMA_QUERY_WITH_DESCRIPTION = """
         { __schema { description queryType { name } mutationType { name } } }
+    """.trimIndent()
+
+    /**
+     * Fallback schema query without description for older GraphQL implementations.
+     */
+    val SCHEMA_QUERY = """
+        { __schema { queryType { name } mutationType { name } } }
     """.trimIndent()
 
     /**

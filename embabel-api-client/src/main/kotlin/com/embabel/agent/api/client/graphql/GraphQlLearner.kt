@@ -219,7 +219,13 @@ class GraphQlLearner(
             restClient: RestClient,
             objectMapper: ObjectMapper,
         ): SchemaRootTypes {
-            val data = executeGraphQl(endpoint, GraphQlIntrospection.SCHEMA_QUERY, restClient, objectMapper)
+            // Try with description first (GraphQL June 2018+ spec), fall back without
+            val data = try {
+                executeGraphQl(endpoint, GraphQlIntrospection.SCHEMA_QUERY_WITH_DESCRIPTION, restClient, objectMapper)
+            } catch (e: Exception) {
+                logger.debug("Schema description not supported at {}, falling back: {}", endpoint, e.message)
+                executeGraphQl(endpoint, GraphQlIntrospection.SCHEMA_QUERY, restClient, objectMapper)
+            }
             @Suppress("UNCHECKED_CAST")
             val schema = data["__schema"] as? Map<String, Any?> ?: return SchemaRootTypes(null, null, null)
             @Suppress("UNCHECKED_CAST")
