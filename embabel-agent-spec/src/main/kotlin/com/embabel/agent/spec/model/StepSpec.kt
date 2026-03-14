@@ -19,19 +19,26 @@ import com.embabel.agent.core.AgentSystemStep
 import com.embabel.common.core.types.NamedAndDescribed
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
+import com.embabel.agent.spec.support.NameOrClassTypeIdResolver
+import com.fasterxml.jackson.databind.annotation.JsonTypeIdResolver
 
 /**
  * Definition of a step in an agent system: Action or Goal.
  *
- * Well-known subtypes are listed in [JsonSubTypes]. Additional subtypes
- * (e.g., from other modules) can be registered via [YmlStepSpecRepository]'s
- * `additionalSubtypes` parameter, using `@JsonTypeName` on the implementation.
+ * Well-known subtypes are listed in [JsonSubTypes] and resolved by short name
+ * (e.g., `"action"`, `"goal"`). Additional subtypes can be registered via
+ * `registerSubtypes()` with `@JsonTypeName`.
+ *
+ * The [NameOrClassTypeIdResolver] also supports fully qualified class names as
+ * stepType values, so any [StepSpec] implementation on the classpath can be
+ * used without pre-registration (e.g., `"com.example.MyCustomExecutor"`).
  */
 @JsonTypeInfo(
-    use = JsonTypeInfo.Id.NAME,
+    use = JsonTypeInfo.Id.CUSTOM,
     include = JsonTypeInfo.As.PROPERTY,
     property = "stepType"
 )
+@JsonTypeIdResolver(NameOrClassTypeIdResolver::class)
 @JsonSubTypes(
     JsonSubTypes.Type(value = PromptedActionSpec::class, name = "action"),
     JsonSubTypes.Type(value = GoalSpec::class, name = "goal")
