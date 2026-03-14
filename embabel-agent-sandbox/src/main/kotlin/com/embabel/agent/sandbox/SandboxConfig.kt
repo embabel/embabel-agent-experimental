@@ -52,6 +52,19 @@ data class SandboxConfig(
      * Values are read from [System.getenv] at execution time.
      */
     val propagateEnv: List<String> = listOf("ANTHROPIC_API_KEY"),
+    /**
+     * Map host environment variables to different names inside the container.
+     * Key = container env var name, value = host env var name.
+     *
+     * Example:
+     * ```yaml
+     * mapEnv:
+     *   GH_TOKEN: GITHUB_PERSONAL_ACCESS_TOKEN
+     * ```
+     * This reads `GITHUB_PERSONAL_ACCESS_TOKEN` from the host and sets
+     * `GH_TOKEN` inside the container.
+     */
+    val mapEnv: Map<String, String> = emptyMap(),
 ) {
 
     /**
@@ -62,12 +75,15 @@ data class SandboxConfig(
         val envFromHost = propagateEnv
             .mapNotNull { key -> System.getenv(key)?.let { key to it } }
             .toMap()
+        val envFromMapping = mapEnv
+            .mapNotNull { (containerKey, hostKey) -> System.getenv(hostKey)?.let { containerKey to it } }
+            .toMap()
         return DockerExecutor(
             image = image,
             networkEnabled = network,
             memoryLimit = memory,
             cpuLimit = cpus,
-            baseEnvironment = envFromHost,
+            baseEnvironment = envFromHost + envFromMapping,
         )
     }
 }
