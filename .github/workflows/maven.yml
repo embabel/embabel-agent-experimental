@@ -53,3 +53,17 @@ jobs:
           echo "testcontainers.reuse.enable=true" > /home/runner/.testcontainers.properties
           # Build without Sonar Cloud
           mvn -U -B test verify
+
+  notify:
+    needs: [build]
+    if: failure() && github.ref == 'refs/heads/main'
+    uses: embabel/embabel-build/.github/workflows/discord-notify.yml@main
+    secrets: inherit
+
+  notify-recovery:
+    needs: [build]
+    if: success() && github.ref == 'refs/heads/main'
+    uses: embabel/embabel-build/.github/workflows/notify-recovery.yml@main
+    with:
+      branch: main
+    secrets: inherit
