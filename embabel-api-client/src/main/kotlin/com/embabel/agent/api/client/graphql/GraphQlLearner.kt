@@ -48,29 +48,40 @@ class GraphQlLearner(
         val restClient = buildIntrospectionClient()
         val objectMapper = jacksonObjectMapper()
 
-        val (queryTypeName, mutationTypeName) = discoverRootTypes(source, restClient, objectMapper)
+        val rootTypes = discoverRootTypes(source, restClient, objectMapper)
+        val schemaDescription = rootTypes.description
 
-        val name = deriveApiName(source)
+        val name = if (!schemaDescription.isNullOrBlank()) {
+            ToolNames.sanitize(schemaDescription.take(40))
+        } else {
+            deriveApiName(source)
+        }
+
+        val description = if (!schemaDescription.isNullOrBlank()) {
+            schemaDescription
+        } else {
+            "GraphQL API at $source"
+        }
 
         return LearnedApi(
             name = name,
-            description = "GraphQL API at $source",
+            description = description,
             authRequirements = defaultAuthRequirements,
             factory = { credentials ->
-                buildTool(source, queryTypeName, mutationTypeName, credentials, objectMapper)
+                buildTool(source, name, rootTypes.queryTypeName, rootTypes.mutationTypeName, credentials, objectMapper)
             },
         )
     }
 
     private fun buildTool(
         endpoint: String,
+        apiName: String,
         queryTypeName: String?,
         mutationTypeName: String?,
         credentials: ApiCredentials,
         objectMapper: ObjectMapper,
     ): ProgressiveTool {
         val restClient = buildApiClient(credentials)
-        val apiName = deriveApiName(endpoint)
 
         val queryTools = if (queryTypeName != null) {
             materializeTools(endpoint, queryTypeName, GraphQlOperationTool.OperationType.QUERY, restClient, objectMapper)
@@ -124,6 +135,15 @@ class GraphQlLearner(
             )
         }
     }
+
+    /**
+     * Result of schema root type discovery, including optional schema description.
+     */
+    data class SchemaRootTypes(
+        val queryTypeName: String?,
+        val mutationTypeName: String?,
+        val description: String?,
+    )
 
     companion object {
 
@@ -198,15 +218,16 @@ class GraphQlLearner(
             endpoint: String,
             restClient: RestClient,
             objectMapper: ObjectMapper,
-        ): Pair<String?, String?> {
+        ): SchemaRootTypes {
             val data = executeGraphQl(endpoint, GraphQlIntrospection.SCHEMA_QUERY, restClient, objectMapper)
             @Suppress("UNCHECKED_CAST")
-            val schema = data["__schema"] as? Map<String, Any?> ?: return Pair(null, null)
+            val schema = data["__schema"] as? Map<String, Any?> ?: return SchemaRootTypes(null, null, null)
             @Suppress("UNCHECKED_CAST")
             val queryType = (schema["queryType"] as? Map<String, Any?>)?.get("name") as? String
             @Suppress("UNCHECKED_CAST")
             val mutationType = (schema["mutationType"] as? Map<String, Any?>)?.get("name") as? String
-            return Pair(queryType, mutationType)
+            val description = schema["description"] as? String
+            return SchemaRootTypes(queryType, mutationType, description)
         }
 
         internal fun introspectFields(

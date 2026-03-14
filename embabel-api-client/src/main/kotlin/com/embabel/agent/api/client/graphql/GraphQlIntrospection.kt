@@ -28,7 +28,7 @@ object GraphQlIntrospection {
      * Query to discover root type names.
      */
     val SCHEMA_QUERY = """
-        { __schema { queryType { name } mutationType { name } } }
+        { __schema { description queryType { name } mutationType { name } } }
     """.trimIndent()
 
     /**
