@@ -15,8 +15,17 @@
  */
 package com.embabel.agent.claudecode
 
+import com.embabel.agent.sandbox.SandboxConfig
+import com.embabel.agent.spec.model.StepSpec
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
+import com.fasterxml.jackson.module.kotlin.readValue
+import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ClaudeCodeAgentExecutorTest {
 
@@ -64,6 +73,55 @@ class ClaudeCodeAgentExecutorTest {
         )
 
         assertEquals(1, result.allAffectedFiles.size)
+    }
+
+    // -- Sandbox config deserialization --
+
+    private fun yamlMapper() = ObjectMapper(YAMLFactory()).apply {
+        registerKotlinModule()
+        disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+        registerSubtypes(ClaudeCodeAgentExecutor::class.java)
+    }
+
+    @Test
+    fun `sandbox config deserializes from YAML with enabled true`() {
+        val yaml = """
+            stepType: com.embabel.agent.claudecode.ClaudeCodeAgentExecutor
+            name: test-sandboxed
+            description: "Test"
+            prompt: "do something"
+            sandbox:
+              enabled: true
+              image: my-image:latest
+              memory: 4g
+              propagateEnv:
+                - MY_KEY
+        """.trimIndent()
+
+        val spec = yamlMapper().readValue<StepSpec<*>>(yaml)
+        assertTrue(spec is ClaudeCodeAgentExecutor)
+        val executor = spec as ClaudeCodeAgentExecutor
+        assertTrue(executor.sandbox.enabled)
+        assertEquals("my-image:latest", executor.sandbox.image)
+        assertEquals("4g", executor.sandbox.memory)
+        assertEquals(listOf("MY_KEY"), executor.sandbox.propagateEnv)
+        assertTrue(executor.isSandboxed())
+    }
+
+    @Test
+    fun `sandbox config defaults to disabled`() {
+        val yaml = """
+            stepType: com.embabel.agent.claudecode.ClaudeCodeAgentExecutor
+            name: test-no-sandbox
+            description: "Test"
+            prompt: "do something"
+        """.trimIndent()
+
+        val spec = yamlMapper().readValue<StepSpec<*>>(yaml)
+        assertTrue(spec is ClaudeCodeAgentExecutor)
+        val executor = spec as ClaudeCodeAgentExecutor
+        assertFalse(executor.sandbox.enabled)
+        assertFalse(executor.isSandboxed())
     }
 
     @Test

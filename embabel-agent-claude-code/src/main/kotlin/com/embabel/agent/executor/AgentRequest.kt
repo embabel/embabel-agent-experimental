@@ -35,6 +35,8 @@ data class AgentRequest<T>(
     val tools: List<Tool> = emptyList(),
     val maxRetries: Int = 0,
     val fitnessThreshold: ZeroToOne = 0.8,
+    /** Optional callback for streaming progress events from the executor. */
+    val streamCallback: ((Any) -> Unit)? = null,
 ) {
 
     fun withFitnessFunction(fitnessFunction: FitnessFunction<T>): AgentRequest<T> = copy(fitnessFunction = fitnessFunction)

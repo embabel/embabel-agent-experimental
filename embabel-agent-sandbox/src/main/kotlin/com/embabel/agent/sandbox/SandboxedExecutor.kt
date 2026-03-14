@@ -210,6 +210,12 @@ data class ExecutionRequest(
     val inputFiles: List<Path> = emptyList(),
     val timeout: Duration,
     val captureOutput: Boolean = true,
+    /**
+     * Optional callback invoked for each line of stdout as it streams.
+     * Enables real-time progress reporting while the command runs.
+     * The full stdout is still captured and returned in [ExecutionResult.Completed].
+     */
+    val stdoutCallback: ((String) -> Unit)? = null,
 )
 
 /**

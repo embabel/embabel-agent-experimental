@@ -164,6 +164,23 @@ class DockerExecutor(
                 process.outputStream.close()
             }
 
+            // Read stdout line-by-line in a background thread so we can
+            // stream progress via the callback while Docker is still running.
+            val outputLines = mutableListOf<String>()
+            val stdoutThread = Thread {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        outputLines.add(line)
+                        request.stdoutCallback?.invoke(line)
+                    }
+                }
+            }.apply { isDaemon = true; start() }
+
+            var stderr = ""
+            val stderrThread = Thread {
+                stderr = process.errorStream.bufferedReader().readText()
+            }.apply { isDaemon = true; start() }
+
             // Wait with timeout
             val completed: Boolean
             val duration = measureTime {
@@ -172,15 +189,19 @@ class DockerExecutor(
 
             if (!completed) {
                 process.destroyForcibly()
+                stdoutThread.join(1000)
+                stderrThread.join(1000)
                 cleanupDirectory(tempBase)
                 return ExecutionResult.TimedOut(
-                    partialStderr = null,
+                    partialStderr = stderr.takeIf { it.isNotBlank() },
                     duration = duration,
                 )
             }
 
-            val stdout = process.inputStream.bufferedReader().readText()
-            val stderr = process.errorStream.bufferedReader().readText()
+            stdoutThread.join()
+            stderrThread.join()
+
+            val stdout = outputLines.joinToString("\n")
             val exitCode = process.exitValue()
 
             // Collect artifacts before cleanup
@@ -382,7 +403,7 @@ class DockerExecutor(
          * - Read-write access to working directory
          */
         fun forClaudeCode(
-            image: String = "node:20-slim",
+            image: String = "embabel/claude-code-sandbox:latest",
         ) = DockerExecutor(
             image = image,
             networkEnabled = true,

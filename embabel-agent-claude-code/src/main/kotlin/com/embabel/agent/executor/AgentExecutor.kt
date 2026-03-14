@@ -129,6 +129,13 @@ interface AgentExecutor : ActionSpec {
     fun <T : Any> executeTyped(request: AgentRequest<T>): TypedResult<T>
 
     /**
+     * Whether this executor runs in a sandbox (e.g., Docker container).
+     * When sandboxed, workspace MCP tools are not passed since the sandbox
+     * can't reach the host's ephemeral MCP server.
+     */
+    fun isSandboxed(): Boolean = false
+
+    /**
      * Emit an [Action] that delegates to this executor.
      * Tools from the [StepSpecContext] are passed to the executor via the [AgentRequest].
      */
@@ -178,15 +185,71 @@ private class AgentExecutorAction(
                 .platformServices.templateRenderer
                 .renderLiteralTemplate(executor.prompt, templateModel)
 
+            // When the executor runs sandboxed (e.g., Docker), skip workspace MCP tools —
+            // the container can't reach the host's ephemeral MCP server, and the sandboxed
+            // CLI (e.g., Claude Code) has its own built-in tools.
+            val effectiveTools = if (executor.isSandboxed()) emptyList() else resolvedTools
+
+            // Wire streaming progress into the output channel so the UI
+            // can show real-time updates while the executor runs.
+            val outputChannel = processContext.processOptions.outputChannel
+            val processId = processContext.agentProcess.id
+
+            // Send an immediate progress event so the UI shows the action is running
+            val sandboxLabel = if (executor.isSandboxed()) " (sandbox)" else ""
+            outputChannel?.send(
+                com.embabel.agent.api.channel.ProgressOutputChannelEvent(
+                    processId = processId,
+                    message = "${executor.name}: executing$sandboxLabel...",
+                )
+            )
+
+            val progressCallback: ((Any) -> Unit)? = if (outputChannel != null) {
+                { event ->
+                    when (event) {
+                        is com.embabel.agent.claudecode.ClaudeStreamEvent.Text ->
+                            outputChannel.send(
+                                com.embabel.agent.api.channel.ProgressOutputChannelEvent(
+                                    processId = processId,
+                                    message = "${executor.name}: ${event.text.take(120)}",
+                                )
+                            )
+                        is com.embabel.agent.claudecode.ClaudeStreamEvent.Error ->
+                            outputChannel.send(
+                                com.embabel.agent.api.channel.ProgressOutputChannelEvent(
+                                    processId = processId,
+                                    message = "${executor.name}: error — ${event.message.take(120)}",
+                                )
+                            )
+                        is com.embabel.agent.claudecode.ClaudeStreamEvent.Complete ->
+                            outputChannel.send(
+                                com.embabel.agent.api.channel.ProgressOutputChannelEvent(
+                                    processId = processId,
+                                    message = "${executor.name}: completed (${event.turns} turns)",
+                                )
+                            )
+                    }
+                }
+            } else null
+
             val request = AgentRequest(
                 prompt = { renderedPrompt },
                 outputClass = String::class.java,
-                tools = resolvedTools,
+                tools = effectiveTools,
+                streamCallback = progressCallback,
             )
 
             when (val result = executor.executeTyped(request)) {
-                is TypedResult.Success ->
-                    processContext.blackboard[varName] = result.value
+                is TypedResult.Success -> {
+                    // If the output type is BackgroundMessage but the executor returned a String,
+                    // wrap it so the planner can match the expected type.
+                    val value = if (executor.outputTypeName.endsWith("BackgroundMessage") && result.value is String) {
+                        com.embabel.agent.spec.model.BackgroundMessage(content = result.value as String)
+                    } else {
+                        result.value
+                    }
+                    processContext.blackboard[varName] = value
+                }
 
                 is TypedResult.Failure ->
                     throw RuntimeException("Agent execution failed: ${result.error}")

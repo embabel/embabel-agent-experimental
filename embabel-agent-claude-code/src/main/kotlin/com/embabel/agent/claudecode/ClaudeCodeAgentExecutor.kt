@@ -19,9 +19,9 @@ import com.embabel.agent.executor.AgentExecutor
 import com.embabel.agent.mcp.EphemeralMcpToolServer
 import com.embabel.agent.executor.AgentRequest
 import com.embabel.agent.executor.TypedResult
-import com.embabel.agent.sandbox.DockerExecutor
 import com.embabel.agent.sandbox.ExecutionRequest
 import com.embabel.agent.sandbox.ExecutionResult
+import com.embabel.agent.sandbox.SandboxConfig
 import com.embabel.agent.sandbox.SandboxedExecutor
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonTypeName
@@ -98,9 +98,18 @@ class ClaudeCodeAgentExecutor(
     private val defaultTimeout: Duration = 10.minutes,
     private val defaultPermissionMode: ClaudeCodePermissionMode = ClaudeCodePermissionMode.ACCEPT_EDITS,
     private val environment: Map<String, String> = emptyMap(),
-    @JsonIgnore
-    private val sandboxExecutor: SandboxedExecutor? = null,
+    /**
+     * Sandbox configuration. When [SandboxConfig.enabled] is true,
+     * Claude Code runs inside a Docker container with configurable
+     * resource limits and environment variable propagation.
+     */
+    val sandbox: SandboxConfig = SandboxConfig(),
 ) : AgentExecutor {
+
+    @JsonIgnore
+    private val sandboxExecutor: SandboxedExecutor? = sandbox.createExecutor()
+
+    override fun isSandboxed(): Boolean = sandboxExecutor != null
 
     @JsonIgnore
     private val logger = LoggerFactory.getLogger(javaClass)
@@ -196,15 +205,24 @@ class ClaudeCodeAgentExecutor(
         )
 
         logger.info(
-            "Executing Claude Code: \"{}\" (allowed tools: {}, max turns: {}{})",
+            "Executing Claude Code: \"{}\" (allowed tools: {}, max turns: {}{}, sandbox: {})",
             prompt.take(80),
             allowedTools?.size ?: "all",
             maxTurns ?: "unlimited",
-            if (streamOutput) ", streaming" else ""
+            if (streamOutput) ", streaming" else "",
+            if (sandboxExecutor != null) "docker" else "none",
         )
 
         val result = if (sandboxExecutor != null) {
             executeSandboxed(command, workingDirectory, timeout, streamOutput, streamCallback)
+        } else if (sandbox.enabled) {
+            // Sandbox was requested but is not available (e.g. Docker not running).
+            // NEVER fall back to unsandboxed execution — this would run Claude Code
+            // directly on the host with full filesystem access.
+            val msg = "Sandbox is enabled but not available. Refusing to run unsandboxed. " +
+                "Ensure Docker is running and the image '${sandbox.image}' is available."
+            logger.error(msg)
+            return ClaudeCodeResult.Denied(msg)
         } else {
             executeDirect(command, workingDirectory, timeout, streamOutput, streamCallback)
         }
@@ -306,6 +324,11 @@ class ClaudeCodeAgentExecutor(
 
         return if (sandboxExecutor != null) {
             executeAsyncSandboxed(command, workingDirectory, timeout)
+        } else if (sandbox.enabled) {
+            val msg = "Sandbox is enabled but not available. Refusing to run unsandboxed. " +
+                "Ensure Docker is running and the image '${sandbox.image}' is available."
+            logger.error(msg)
+            ClaudeCodeAsyncExecution.denied(ClaudeCodeResult.Denied(msg))
         } else {
             executeAsyncDirect(command, workingDirectory, timeout)
         }
@@ -388,20 +411,26 @@ class ClaudeCodeAgentExecutor(
     ): ClaudeCodeResult {
         val executor = sandboxExecutor ?: return ClaudeCodeResult.Denied("No sandbox executor configured")
 
+        // When streaming, pipe each stdout line through logStreamLine in real-time
+        // via the ExecutionRequest's stdoutCallback. DockerExecutor reads stdout
+        // line-by-line in a thread, so the callback fires as Docker produces output.
+        val stdoutLineCallback: ((String) -> Unit)? = if (streamOutput && streamCallback != null) {
+            { line -> logStreamLine(line, streamCallback) }
+        } else null
+
         val request = ExecutionRequest(
             command = command,
             workingDirectory = workingDirectory,
             environment = environment + mapOf("CI" to "true"),
             timeout = timeout,
+            stdoutCallback = stdoutLineCallback,
         )
 
-        // Note: Sandboxed execution doesn't support real-time streaming yet,
-        // but we still parse stream-json format if requested
         return when (val result = executor.execute(request)) {
             is ExecutionResult.Completed -> {
                 if (streamOutput) {
-                    // Process each line through the callback for post-hoc streaming
-                    if (streamCallback != null) {
+                    // If no real-time callback was used, process post-hoc
+                    if (stdoutLineCallback == null && streamCallback != null) {
                         result.stdout.lines().forEach { line ->
                             logStreamLine(line, streamCallback)
                         }
@@ -804,6 +833,8 @@ class ClaudeCodeAgentExecutor(
                     feedback
                 }
 
+                val rawCallback = request.streamCallback
+                val streamCallback: ((ClaudeStreamEvent) -> Unit)? = rawCallback?.let { cb -> { event -> cb(event) } }
                 val result = execute(
                     prompt = prompt,
                     workingDirectory = workingDirectory,
@@ -814,6 +845,8 @@ class ClaudeCodeAgentExecutor(
                     model = model,
                     systemPrompt = systemPrompt,
                     mcpConfig = mcpConfig,
+                    streamOutput = rawCallback != null,
+                    streamCallback = streamCallback,
                 )
 
                 if (result !is ClaudeCodeResult.Success) {
@@ -962,25 +995,23 @@ class ClaudeCodeAgentExecutor(
         ): ClaudeCodeAgentExecutor {
             return ClaudeCodeAgentExecutor(
                 defaultTimeout = timeout,
-                sandboxExecutor = DockerExecutor(
+                sandbox = SandboxConfig(
+                    enabled = true,
                     image = image,
-                    networkEnabled = true, // Needed for Anthropic API
-                    memoryLimit = "2g",
-                    cpuLimit = "2.0",
                 ),
             )
         }
 
         /**
-         * Create a sandboxed executor with a custom sandbox.
+         * Create a sandboxed executor with a custom [SandboxConfig].
          */
         fun withSandbox(
-            sandbox: SandboxedExecutor,
+            config: SandboxConfig,
             timeout: Duration = 10.minutes,
         ): ClaudeCodeAgentExecutor {
             return ClaudeCodeAgentExecutor(
                 defaultTimeout = timeout,
-                sandboxExecutor = sandbox,
+                sandbox = config,
             )
         }
     }
