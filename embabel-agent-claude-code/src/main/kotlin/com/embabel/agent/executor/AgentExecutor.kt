@@ -235,9 +235,22 @@ private class AgentExecutorAction(
                 }
             } else null
 
+            // Resolve the output class so the executor can deserialize to the correct type.
+            // Fall back to String if the class isn't on the classpath.
+            val outputClass: Class<*> = when {
+                executor.outputTypeName == "String" -> String::class.java
+                executor.outputTypeName.endsWith("BackgroundMessage") -> String::class.java
+                else -> try {
+                    Class.forName(executor.outputTypeName)
+                } catch (_: ClassNotFoundException) {
+                    String::class.java
+                }
+            }
+
+            @Suppress("UNCHECKED_CAST")
             val request = AgentRequest(
                 prompt = { renderedPrompt },
-                outputClass = String::class.java,
+                outputClass = outputClass as Class<Any>,
                 tools = effectiveTools,
                 streamCallback = progressCallback,
             )

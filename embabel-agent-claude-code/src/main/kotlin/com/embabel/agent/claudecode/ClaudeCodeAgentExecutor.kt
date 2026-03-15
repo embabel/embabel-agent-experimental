@@ -901,11 +901,25 @@ class ClaudeCodeAgentExecutor(
      * Extract JSON from a Claude response that may contain markdown fencing or extra text.
      */
     internal fun <T> extractAndParse(text: String, clazz: Class<T>): T {
-        // For String output, return the text directly — don't try to parse as JSON.
-        // Claude Code's response is already the desired string content.
         if (clazz == String::class.java) {
+            // For String output, unwrap JSON if the response is a JSON object.
+            // Claude may return {"result": "..."} when asked for a string.
+            val trimmed = text.trim()
+            val result = if (trimmed.startsWith("{")) {
+                try {
+                    val tree = objectMapper.readTree(trimmed)
+                    // Extract the first text value from the object
+                    tree.get("result")?.asText()
+                        ?: tree.fields().asSequence().firstOrNull()?.value?.asText()
+                        ?: trimmed
+                } catch (_: Exception) {
+                    trimmed
+                }
+            } else {
+                trimmed
+            }
             @Suppress("UNCHECKED_CAST")
-            return text as T
+            return result as T
         }
         val json = extractJson(text)
         return objectMapper.readValue(json, clazz)

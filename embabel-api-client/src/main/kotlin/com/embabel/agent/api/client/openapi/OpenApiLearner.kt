@@ -85,7 +85,6 @@ class OpenApiLearner : ApiLearner {
                 name = apiName,
                 description = apiDescription,
                 innerTools = allTools.values.toList(),
-                includeContextTool = false,
             )
         } else {
             UnfoldingTool.byCategory(
