@@ -168,11 +168,20 @@ class DockerExecutor(
             // stream progress via the callback while Docker is still running.
             val outputLines = mutableListOf<String>()
             val stdoutThread = Thread {
-                process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line ->
-                        outputLines.add(line)
-                        request.stdoutCallback?.invoke(line)
+                try {
+                    process.inputStream.bufferedReader().useLines { lines ->
+                        lines.forEach { rawLine ->
+                            // Strip carriage returns added by Docker's -t (pseudo-TTY) flag.
+                            // Without this, JSON parsing fails on the trailing \r.
+                            val line = rawLine.trimEnd('\r')
+                            outputLines.add(line)
+                            logger.debug("Docker stdout [{}]: {}", outputLines.size, line.take(80))
+                            request.stdoutCallback?.invoke(line)
+                        }
                     }
+                    logger.info("Docker stdout reader finished: {} lines read", outputLines.size)
+                } catch (e: Exception) {
+                    logger.warn("Docker stdout reader error: {}", e.message)
                 }
             }.apply { isDaemon = true; start() }
 
@@ -231,7 +240,15 @@ class DockerExecutor(
         inputDir: Path,
         outputDir: Path,
     ): List<String> {
-        val command = mutableListOf("docker", "run", "--rm")
+        // When streaming stdout (stdoutCallback is set), allocate a pseudo-TTY
+        // to force line-buffered output. Without this, Docker buffers stdout
+        // and lines don't arrive until the process exits.
+        // Note: -t merges stderr into stdout, so stderr will be empty when streaming.
+        val command = if (request.stdoutCallback != null) {
+            mutableListOf("docker", "run", "--rm", "-t")
+        } else {
+            mutableListOf("docker", "run", "--rm")
+        }
 
         // Resource limits
         memoryLimit?.let { command.addAll(listOf("--memory", it)) }

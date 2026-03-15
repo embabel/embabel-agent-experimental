@@ -194,10 +194,13 @@ private class AgentExecutorAction(
             // can show real-time updates while the executor runs.
             val outputChannel = processContext.processOptions.outputChannel
             val processId = processContext.agentProcess.id
+            val logger = org.slf4j.LoggerFactory.getLogger("AgentExecutorAction")
+            logger.info("Output channel type for {}: {} (processId={})",
+                executor.name, outputChannel::class.simpleName, processId)
 
             // Send an immediate progress event so the UI shows the action is running
             val sandboxLabel = if (executor.isSandboxed()) " (sandbox)" else ""
-            outputChannel?.send(
+            outputChannel.send(
                 com.embabel.agent.api.channel.ProgressOutputChannelEvent(
                     processId = processId,
                     message = "${executor.name}: executing$sandboxLabel...",
