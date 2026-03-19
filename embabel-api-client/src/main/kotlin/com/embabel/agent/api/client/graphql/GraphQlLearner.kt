@@ -252,7 +252,7 @@ class GraphQlLearner(
                 fields.mapNotNull { parseField(it) }
                     .filter { !it.name.startsWith("_") }
             } catch (e: Exception) {
-                logger.info("Full introspection failed for {}, falling back to shallow queries: {}", typeName, e.message)
+                logger.info("Full introspection failed for {} at {}, falling back to shallow queries: {}", typeName, endpoint, e.message)
                 introspectFieldsShallow(endpoint, typeName, restClient, objectMapper)
             }
         }
@@ -405,7 +405,7 @@ class GraphQlLearner(
 
                 if (fieldSelections.isEmpty()) "" else "{ ${fieldSelections.joinToString(" ")} }"
             } catch (e: Exception) {
-                logger.warn("Failed to build selection set for {}: {}", typeName, e.message)
+                logger.warn("Failed to build selection set for {} at {}: {}", typeName, endpoint, e.message)
                 ""
             }
         }

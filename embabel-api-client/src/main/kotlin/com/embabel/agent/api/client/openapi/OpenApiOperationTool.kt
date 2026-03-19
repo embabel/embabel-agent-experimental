@@ -76,8 +76,8 @@ class OpenApiOperationTool(
             logger.warn(message)
             Tool.Result.error(message, e)
         } catch (e: Exception) {
-            logger.warn("Error calling {} {}: {}", httpMethod, path, e.message)
-            Tool.Result.error("Error calling $httpMethod $path: ${e.message}", e)
+            logger.warn("Error calling {} {} at {}: {}", httpMethod, path, baseUrl, e.message)
+            Tool.Result.error("Error calling $httpMethod $path at $baseUrl: ${e.message}", e)
         }
     }
 

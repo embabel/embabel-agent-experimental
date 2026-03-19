@@ -62,7 +62,7 @@ class GraphQlOperationTool(
                 requestBody["variables"] = params
             }
 
-            logger.debug("GraphQL {} {}: {}", operationType, field.name, query)
+            logger.debug("GraphQL {} {} at {}: {}", operationType, field.name, endpoint, query)
 
             val response = restClient.post()
                 .uri(endpoint)
@@ -77,7 +77,7 @@ class GraphQlOperationTool(
             logger.warn(message)
             Tool.Result.error(message, e)
         } catch (e: Exception) {
-            logger.warn("Error calling GraphQL {}: {}", field.name, e.message)
+            logger.warn("Error calling GraphQL {} at {}: {}", field.name, endpoint, e.message)
             Tool.Result.error("Error calling GraphQL ${field.name}: ${e.message}", e)
         }
     }

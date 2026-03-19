@@ -102,7 +102,7 @@ class HttpProbeTool(
             val response = "HTTP ${e.statusCode.value()}\nContent-Type: ${e.responseHeaders?.contentType ?: "unknown"}\n\n$truncatedBody"
             Tool.Result.text(response)
         } catch (e: Exception) {
-            logger.debug("HTTP probe error: {}", e.message)
+            logger.debug("HTTP probe error for input {}: {}", input, e.message)
             Tool.Result.error("Request failed: ${e.message}")
         }
     }
