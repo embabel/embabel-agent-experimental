@@ -35,9 +35,17 @@ class ScratchToolTest {
         return (result as Tool.Result.Text).content
     }
 
+    private fun assumeSandboxAvailable() {
+        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeTrue(
+            DockerExecutor.imageExists(ScratchTool.DEFAULT_IMAGE),
+            "Sandbox image ${ScratchTool.DEFAULT_IMAGE} not available"
+        )
+    }
+
     @Test
     fun `basic command execution`() {
-        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeSandboxAvailable()
 
         scratch = ScratchTool.default()
         val text = resultText(scratch!!.call("""{"command": "echo hello world"}"""))
@@ -46,7 +54,7 @@ class ScratchToolTest {
 
     @Test
     fun `state persists between calls`() {
-        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeSandboxAvailable()
 
         scratch = ScratchTool.default()
         scratch!!.call("""{"command": "echo 'test content' > /tmp/myfile.txt"}""")
@@ -56,7 +64,7 @@ class ScratchToolTest {
 
     @Test
     fun `reports non-zero exit code`() {
-        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeSandboxAvailable()
 
         scratch = ScratchTool.default()
         val text = resultText(scratch!!.call("""{"command": "exit 42"}"""))
@@ -65,7 +73,7 @@ class ScratchToolTest {
 
     @Test
     fun `python execution`() {
-        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeSandboxAvailable()
 
         scratch = ScratchTool.default()
         val text = resultText(scratch!!.call("""{"command": "python3 -c 'print(2 + 2)'"}"""))
@@ -74,7 +82,7 @@ class ScratchToolTest {
 
     @Test
     fun `node execution`() {
-        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeSandboxAvailable()
 
         scratch = ScratchTool.default()
         val text = resultText(scratch!!.call("""{"command": "node -e 'console.log(3 * 7)'"}"""))
@@ -83,7 +91,7 @@ class ScratchToolTest {
 
     @Test
     fun `java version available`() {
-        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeSandboxAvailable()
 
         scratch = ScratchTool.default()
         val text = resultText(scratch!!.call("""{"command": "java -version 2>&1 | head -1"}"""))
@@ -92,7 +100,7 @@ class ScratchToolTest {
 
     @Test
     fun `sqlite works`() {
-        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeSandboxAvailable()
 
         scratch = ScratchTool.default()
         val text = resultText(scratch!!.call("""{"command": "sqlite3 :memory: 'SELECT 1+1;'"}"""))
@@ -101,7 +109,7 @@ class ScratchToolTest {
 
     @Test
     fun `graphviz generates svg`() {
-        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeSandboxAvailable()
 
         scratch = ScratchTool.default()
         val text = resultText(scratch!!.call("""{"command": "echo 'digraph { A -> B }' | dot -Tsvg | head -3"}"""))
@@ -110,7 +118,7 @@ class ScratchToolTest {
 
     @Test
     fun `pip install and use package`() {
-        assumeTrue(DockerExecutor.isDockerAvailable(), "Docker not available")
+        assumeSandboxAvailable()
 
         scratch = ScratchTool.default()
         val text = resultText(scratch!!.call("""{"command": "python3 -c 'import pandas; print(pandas.__version__)'"}"""))
