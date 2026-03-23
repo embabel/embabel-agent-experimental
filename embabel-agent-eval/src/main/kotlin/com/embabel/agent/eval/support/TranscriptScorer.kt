@@ -15,14 +15,12 @@
  */
 package com.embabel.agent.eval.support
 
+import com.embabel.agent.api.common.Ai
 import com.embabel.agent.eval.client.SessionCreationRequest
+import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.textio.template.TemplateRenderer
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import org.springframework.ai.chat.client.ChatClient
-import org.springframework.ai.chat.client.entity
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.ChatOptions
 
 internal val SCORES_EXAMPLE = SubjectiveScores(
     tone = 0.5,
@@ -40,14 +38,12 @@ internal val SCORES_EXAMPLE = SubjectiveScores(
  * for in-process evaluation scenarios.
  */
 class TranscriptScorer(
-    private val scoringChatModel: ChatModel,
+    private val ai: Ai,
     private val templateRenderer: TemplateRenderer,
 ) {
 
     fun scoreTranscript(evaluationRun: EvaluationRun): SubjectiveScores {
-        val scoringChatOptions = ChatOptions.builder()
-            .temperature(evaluationRun.job.scorer.temperature)
-            .build()
+        val llmOptions = LlmOptions(temperature = evaluationRun.job.scorer.temperature)
         val prompt = templateRenderer.renderLoadedTemplate(
             evaluationRun.job.scorer.prompt,
             mapOf(
@@ -57,12 +53,7 @@ class TranscriptScorer(
                     .writeValueAsString(SCORES_EXAMPLE),
             )
         )
-        val chatClient = ChatClient
-            .builder(scoringChatModel)
-            .defaultOptions(scoringChatOptions)
-            .build()
-        return chatClient.prompt(prompt).call()
-            .entity<SubjectiveScores>()
+        return ai.withLlm(llmOptions).createObject(prompt, SubjectiveScores::class.java)
     }
 
     /**

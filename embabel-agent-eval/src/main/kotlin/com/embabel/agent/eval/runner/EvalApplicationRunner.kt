@@ -15,6 +15,8 @@
  */
 package com.embabel.agent.eval.runner
 
+import com.embabel.agent.api.common.Ai
+import com.embabel.agent.api.common.AiBuilder
 import com.embabel.agent.api.models.OpenAiModels
 import com.embabel.agent.eval.assert.AssertionEvaluator
 import com.embabel.agent.eval.client.AgentChatClient
@@ -25,7 +27,6 @@ import com.embabel.agent.eval.support.EvaluationRunner
 import com.embabel.common.textio.template.TemplateRenderer
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.model.ChatModel
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.ApplicationArguments
 import org.springframework.boot.ApplicationRunner
@@ -38,13 +39,15 @@ import java.math.RoundingMode
  */
 @Component
 class EvalApplicationRunner(
-    private val evaluatorChatModel: ChatModel,
+    aiBuilder: AiBuilder,
     private val templateRenderer: TemplateRenderer,
     private val assertionEvaluator: AssertionEvaluator,
     private val agentChatClient: AgentChatClient,
 ) : ApplicationRunner {
 
     private val logger: Logger = LoggerFactory.getLogger(EvalApplicationRunner::class.java)
+
+    private val ai: Ai = aiBuilder.ai()
 
     @Value("\${verbose:false}")
     private var verbose: Boolean = false
@@ -56,7 +59,7 @@ class EvalApplicationRunner(
     private var model: String = OpenAiModels.GPT_41_MINI
 
     private val evaluationRunner: EvaluationRunner = DefaultEvaluationRunner(
-        evaluatorChatModel = evaluatorChatModel,
+        ai = ai,
         templateRenderer = templateRenderer,
         setupRunner = assertionEvaluator,
         assertionEvaluator = assertionEvaluator,

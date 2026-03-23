@@ -15,23 +15,21 @@
  */
 package com.embabel.agent.eval.runner
 
+import com.embabel.agent.api.common.Ai
 import com.embabel.agent.api.models.OpenAiModels
 import com.embabel.agent.eval.assert.AssertionEvaluator
 import com.embabel.agent.eval.client.*
 import com.embabel.agent.eval.support.*
+import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.textio.template.TemplateRenderer
 import org.slf4j.LoggerFactory
-import org.springframework.ai.chat.model.ChatModel
-import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.chat.prompt.Prompt
 import org.springframework.retry.RetryCallback
 import org.springframework.retry.RetryContext
 import org.springframework.retry.RetryListener
 import org.springframework.retry.support.RetryTemplateBuilder
 
 class DefaultEvaluationRunner(
-    private val evaluatorChatModel: ChatModel,
-    private val scoringChatModel: ChatModel = evaluatorChatModel,
+    private val ai: Ai,
     private val templateRenderer: TemplateRenderer,
     private val setupRunner: SetupRunner,
     private val assertionEvaluator: AssertionEvaluator,
@@ -39,7 +37,7 @@ class DefaultEvaluationRunner(
 ) : EvaluationRunner {
 
     private val logger = LoggerFactory.getLogger(DefaultEvaluationRunner::class.java)
-    private val transcriptScorer = TranscriptScorer(scoringChatModel, templateRenderer)
+    private val transcriptScorer = TranscriptScorer(ai, templateRenderer)
 
     override fun evaluateConversation(
         evaluationJob: EvaluationJob,
@@ -178,10 +176,10 @@ class DefaultEvaluationRunner(
         evaluationInProgress: EvaluationInProgress,
         sessionId: String,
     ): ChatRequest {
-        val chatOptions = ChatOptions.builder()
-            .model(OpenAiModels.GPT_41_MINI)
-            .temperature(evaluationInProgress.job.evaluator.temperature)
-            .build()
+        val llmOptions = LlmOptions(
+            model = OpenAiModels.GPT_41_MINI,
+            temperature = evaluationInProgress.job.evaluator.temperature,
+        )
         val systemPrompt = templateRenderer.renderLoadedTemplate(
             evaluationInProgress.job.evaluator.prompt,
             mapOf(
@@ -189,14 +187,12 @@ class DefaultEvaluationRunner(
                 "transcript" to evaluationInProgress.transcript,
             )
         )
-//        println(systemPrompt)
         val timedChatResponse = time {
-            evaluatorChatModel
-                .call(Prompt(systemPrompt, chatOptions))
+            ai.withLlm(llmOptions) generateText systemPrompt
         }
         val reply = ChatRequest(
             sessionId = sessionId,
-            message = timedChatResponse.first.result.output.text!!,
+            message = timedChatResponse.first,
             model = evaluationInProgress.model,
         )
         evaluationInProgress.addEvaluatorUserMessage(
