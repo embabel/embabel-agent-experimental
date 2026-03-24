@@ -179,6 +179,9 @@ class GraphQlLearner(
                 is ApiCredentials.None -> {}
                 is ApiCredentials.Token -> builder.defaultHeader("Authorization", "Bearer ${credentials.token}")
                 is ApiCredentials.ApiKey -> builder.defaultHeader("Authorization", credentials.value)
+                is ApiCredentials.CustomHeaders -> credentials.headers.forEach { (name, value) ->
+                    builder.defaultHeader(name, value)
+                }
                 is ApiCredentials.Multiple -> credentials.credentials.forEach { cred ->
                     if (cred is ApiCredentials.Token) {
                         builder.defaultHeader("Authorization", "Bearer ${cred.token}")

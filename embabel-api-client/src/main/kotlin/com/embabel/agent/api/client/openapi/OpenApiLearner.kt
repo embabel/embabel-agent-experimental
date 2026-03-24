@@ -154,6 +154,12 @@ class OpenApiLearner : ApiLearner {
                 }
             }
 
+            is ApiCredentials.CustomHeaders -> {
+                credentials.headers.forEach { (name, value) ->
+                    builder.defaultHeader(name, value)
+                }
+            }
+
             is ApiCredentials.Multiple -> {
                 credentials.credentials.forEach { applyCredentials(builder, openApi, it) }
             }

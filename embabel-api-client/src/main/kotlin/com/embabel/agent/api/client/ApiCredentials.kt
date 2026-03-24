@@ -22,5 +22,7 @@ sealed interface ApiCredentials {
     data object None : ApiCredentials
     data class Token(val token: String) : ApiCredentials
     data class ApiKey(val value: String) : ApiCredentials
+    /** Arbitrary HTTP headers — for APIs that need custom auth headers (e.g. RapidAPI). */
+    data class CustomHeaders(val headers: Map<String, String>) : ApiCredentials
     data class Multiple(val credentials: List<ApiCredentials>) : ApiCredentials
 }
