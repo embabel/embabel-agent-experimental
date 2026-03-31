@@ -41,7 +41,11 @@ sealed interface AuthRequirement {
     data object None : AuthRequirement
     data class ApiKey(val name: String, val location: ApiKeyLocation) : AuthRequirement
     data class Bearer(val scheme: String = "bearer") : AuthRequirement
-    data class OAuth2(val scopes: List<String> = emptyList()) : AuthRequirement
+    data class OAuth2(
+        val scopes: List<String> = emptyList(),
+        val authUrl: String? = null,
+        val tokenUrl: String? = null,
+    ) : AuthRequirement
 }
 
 enum class ApiKeyLocation {

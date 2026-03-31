@@ -25,4 +25,34 @@ sealed interface ApiCredentials {
     /** Arbitrary HTTP headers — for APIs that need custom auth headers (e.g. RapidAPI). */
     data class CustomHeaders(val headers: Map<String, String>) : ApiCredentials
     data class Multiple(val credentials: List<ApiCredentials>) : ApiCredentials
+
+    /**
+     * OAuth2 credentials with access token, refresh token, and provider config.
+     * The [accessToken] is used for API calls. When it expires, the [refreshToken]
+     * is used to obtain a new one via the [tokenUrl].
+     */
+    data class OAuth2(
+        val accessToken: String,
+        val refreshToken: String? = null,
+        val expiry: java.time.Instant? = null,
+        val tokenUrl: String,
+        val clientId: String,
+        val clientSecret: String,
+        val scopes: String? = null,
+    ) : ApiCredentials {
+
+        /** Whether the access token has expired or will expire within the buffer period. */
+        fun isExpired(bufferSeconds: Long = 300): Boolean {
+            val exp = expiry ?: return false
+            return java.time.Instant.now().plusSeconds(bufferSeconds).isAfter(exp)
+        }
+
+        /** Create a copy with a refreshed access token and new expiry. */
+        fun withRefreshedToken(newAccessToken: String, newExpiry: java.time.Instant?, newRefreshToken: String? = null): OAuth2 =
+            copy(
+                accessToken = newAccessToken,
+                expiry = newExpiry,
+                refreshToken = newRefreshToken ?: refreshToken,
+            )
+    }
 }

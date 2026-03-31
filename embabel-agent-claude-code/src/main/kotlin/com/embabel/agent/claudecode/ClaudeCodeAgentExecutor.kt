@@ -22,6 +22,7 @@ import com.embabel.agent.executor.TypedResult
 import com.embabel.agent.sandbox.ExecutionRequest
 import com.embabel.agent.sandbox.ExecutionResult
 import com.embabel.agent.sandbox.SandboxConfig
+import com.embabel.agent.sandbox.SandboxSession
 import com.embabel.agent.sandbox.SandboxedExecutor
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonTypeName
@@ -188,6 +189,7 @@ class ClaudeCodeAgentExecutor(
         streamOutput: Boolean = false,
         streamCallback: ((ClaudeStreamEvent) -> Unit)? = null,
         mcpConfig: String? = null,
+        sandboxSession: SandboxSession? = null,
     ): ClaudeCodeResult {
         // Check availability first
         checkAvailability()?.let { return it }
@@ -204,16 +206,24 @@ class ClaudeCodeAgentExecutor(
             mcpConfig = mcpConfig,
         )
 
+        val usingSandboxSession = sandboxSession != null
         logger.info(
             "Executing Claude Code: \"{}\" (allowed tools: {}, max turns: {}{}, sandbox: {})",
             prompt.take(80),
             allowedTools?.size ?: "all",
             maxTurns ?: "unlimited",
             if (streamOutput) ", streaming" else "",
-            if (sandboxExecutor != null) "docker" else "none",
+            when {
+                usingSandboxSession -> "session:${sandboxSession!!.id}"
+                sandboxExecutor != null -> "docker"
+                else -> "none"
+            },
         )
 
-        val result = if (sandboxExecutor != null) {
+        // Priority: explicit sandbox session > configured sandbox executor > direct
+        val result = if (usingSandboxSession) {
+            executeInSession(command, sandboxSession!!, workingDirectory, timeout, streamOutput, streamCallback)
+        } else if (sandboxExecutor != null) {
             executeSandboxed(command, workingDirectory, timeout, streamOutput, streamCallback)
         } else if (sandbox.enabled) {
             // Sandbox was requested but is not available (e.g. Docker not running).
@@ -430,6 +440,58 @@ class ClaudeCodeAgentExecutor(
             is ExecutionResult.Completed -> {
                 if (streamOutput) {
                     // If no real-time callback was used, process post-hoc
+                    if (stdoutLineCallback == null && streamCallback != null) {
+                        result.stdout.lines().forEach { line ->
+                            logStreamLine(line, streamCallback)
+                        }
+                    }
+                    parseStreamOutput(result.stdout, result.exitCode, result.duration)
+                } else {
+                    parseOutput(result.stdout, result.exitCode, result.duration)
+                }
+            }
+            is ExecutionResult.TimedOut -> ClaudeCodeResult.Failure(
+                error = "Execution timed out after $timeout",
+                timedOut = true,
+                duration = result.duration,
+            )
+            is ExecutionResult.Failed -> ClaudeCodeResult.Failure(
+                error = result.error,
+            )
+            is ExecutionResult.Denied -> ClaudeCodeResult.Denied(result.reason)
+        }
+    }
+
+    /**
+     * Execute Claude Code inside a persistent [SandboxSession].
+     *
+     * Unlike [executeSandboxed] which creates a fresh container per call,
+     * this runs in the session's existing container. State from prior
+     * executions (packages, files, env) is preserved.
+     */
+    private fun executeInSession(
+        command: List<String>,
+        session: SandboxSession,
+        workingDirectory: Path?,
+        timeout: Duration,
+        streamOutput: Boolean,
+        streamCallback: ((ClaudeStreamEvent) -> Unit)?,
+    ): ClaudeCodeResult {
+        val stdoutLineCallback: ((String) -> Unit)? = if (streamOutput && streamCallback != null) {
+            { line -> logStreamLine(line, streamCallback) }
+        } else null
+
+        val request = ExecutionRequest(
+            command = command,
+            workingDirectory = workingDirectory,
+            environment = environment + mapOf("CI" to "true"),
+            timeout = timeout,
+            stdoutCallback = stdoutLineCallback,
+        )
+
+        return when (val result = session.execute(request)) {
+            is ExecutionResult.Completed -> {
+                if (streamOutput) {
                     if (stdoutLineCallback == null && streamCallback != null) {
                         result.stdout.lines().forEach { line ->
                             logStreamLine(line, streamCallback)

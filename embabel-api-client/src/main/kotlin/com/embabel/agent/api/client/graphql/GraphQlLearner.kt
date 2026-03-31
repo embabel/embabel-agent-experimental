@@ -187,6 +187,7 @@ class GraphQlLearner(
                         builder.defaultHeader("Authorization", "Bearer ${cred.token}")
                     }
                 }
+                is ApiCredentials.OAuth2 -> builder.defaultHeader("Authorization", "Bearer ${credentials.accessToken}")
             }
 
             return builder.build()

@@ -163,6 +163,10 @@ class OpenApiLearner : ApiLearner {
             is ApiCredentials.Multiple -> {
                 credentials.credentials.forEach { applyCredentials(builder, openApi, it) }
             }
+
+            is ApiCredentials.OAuth2 -> {
+                builder.defaultHeader("Authorization", "Bearer ${credentials.accessToken}")
+            }
         }
     }
 

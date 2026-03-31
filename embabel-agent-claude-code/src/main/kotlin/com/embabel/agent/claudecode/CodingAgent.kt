@@ -19,6 +19,7 @@ import com.embabel.agent.api.annotation.Action
 import com.embabel.agent.api.annotation.Agent
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.mcp.EphemeralMcpToolServer
+import com.embabel.agent.sandbox.SandboxSession
 import java.nio.file.Path
 
 /**
@@ -341,6 +342,53 @@ class CodeImplementationAgent(
         )
 
         return toOutcome(result)
+    }
+
+    /**
+     * Execute a turn within a [CodingSession], preserving both the sandbox
+     * environment and Claude's conversation context.
+     *
+     * @param session the coding session (sandbox + Claude session)
+     * @param prompt the instruction for this turn
+     * @param additionalTools additional Claude tools to allow
+     * @return updated coding session with result, or null on failure
+     */
+    @Action(
+        description = "Execute a turn in a persistent coding session",
+    )
+    fun executeTurn(
+        session: CodingSession,
+        prompt: String,
+        additionalTools: List<ClaudeCodeAllowedTool> = emptyList(),
+    ): Pair<CodingSession, ImplementationOutcome> {
+        val allTools = listOf(
+            ClaudeCodeAllowedTool.READ,
+            ClaudeCodeAllowedTool.EDIT,
+            ClaudeCodeAllowedTool.WRITE,
+            ClaudeCodeAllowedTool.BASH,
+            ClaudeCodeAllowedTool.GLOB,
+            ClaudeCodeAllowedTool.GREP,
+        ) + additionalTools
+
+        val result = executor.execute(
+            prompt = prompt,
+            workingDirectory = session.codebase?.path,
+            allowedTools = allTools.distinct(),
+            maxTurns = defaultMaxTurns,
+            streamOutput = streamOutput,
+            streamCallback = streamCallback,
+            sessionId = session.claudeSessionId,
+            sandboxSession = session.sandboxSession,
+        )
+
+        val outcome = toOutcome(result)
+        val updatedSession = if (result is ClaudeCodeResult.Success) {
+            session.advance(result)
+        } else {
+            session
+        }
+
+        return updatedSession to outcome
     }
 
     /**
