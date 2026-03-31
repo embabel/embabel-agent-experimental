@@ -223,7 +223,12 @@ class DockerSandboxSession(
 
     override fun copyTo(hostPath: Path, containerPath: String) {
         val cid = containerId ?: throw IllegalStateException("No container")
-        val process = ProcessBuilder("docker", "cp", hostPath.toString(), "$cid:$containerPath")
+        // Ensure target directory exists
+        ProcessBuilder("docker", "exec", cid, "mkdir", "-p", containerPath)
+            .redirectErrorStream(true).start().waitFor(5, TimeUnit.SECONDS)
+        // Append /. to copy directory CONTENTS, not the directory itself
+        val source = if (hostPath.toFile().isDirectory) "${hostPath}/." else hostPath.toString()
+        val process = ProcessBuilder("docker", "cp", source, "$cid:$containerPath")
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.bufferedReader().readText()
