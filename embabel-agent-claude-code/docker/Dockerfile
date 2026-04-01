@@ -22,12 +22,37 @@ RUN apt-get update && \
         git \
         jq \
         make \
+        gnupg \
         python3 \
         ripgrep \
         sudo \
-        unzip && \
+        unzip \
+        wget && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Install Java 21 (Temurin)
+RUN curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /usr/share/keyrings/adoptium.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo $VERSION_CODENAME) main" \
+        > /etc/apt/sources.list.d/adoptium.list && \
+    apt-get update && \
+    apt-get install -yy --no-install-recommends temurin-21-jdk && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/temurin-21-jdk
+
+# Ensure JAVA_HOME resolves regardless of architecture
+RUN if [ ! -d "$JAVA_HOME" ]; then ln -s /usr/lib/jvm/temurin-21-jdk-* "$JAVA_HOME"; fi
+
+# Install Maven
+RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.8/binaries/apache-maven-3.9.8-bin.tar.gz \
+        -o /tmp/maven.tar.gz && \
+    tar -xzf /tmp/maven.tar.gz -C /opt && \
+    ln -s /opt/apache-maven-3.9.8/bin/mvn /usr/local/bin/mvn && \
+    rm /tmp/maven.tar.gz
+
+ENV MAVEN_HOME=/opt/apache-maven-3.9.8
 
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
