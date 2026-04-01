@@ -13,10 +13,10 @@
     <packaging>pom</packaging>
 
     <properties>
-        <revision>0.3.5-SNAPSHOT</revision>
+        <revision>0.4.0-SNAPSHOT</revision>
     </properties>
     <name>Embabel Example Agent Experimental</name>
-    <description>Example Agentic Experimental Moduels Incubation</description>
+    <description>Example Agentic Experimental Models Incubation</description>
 
     <modules>
         <module>embabel-agent-experimental-bom</module>
