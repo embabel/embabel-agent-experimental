@@ -101,19 +101,34 @@ class DockerSandboxSession(
 
         containerId = output.take(12)
 
-        // Start the container
-        val startProcess = ProcessBuilder("docker", "start", containerId!!)
-            .redirectErrorStream(true)
-            .start()
-        val startOutput = startProcess.inputStream.bufferedReader().readText().trim()
-        val startExit = startProcess.waitFor()
+        // Start the container with retry logic for transient Docker daemon issues
+        val maxRetries = 3
+        var lastError: String? = null
 
-        if (startExit != 0) {
-            state = SandboxSession.SessionState.CLOSED
-            throw RuntimeException("Failed to start sandbox container: $startOutput")
+        for (attempt in 1..maxRetries) {
+            val startProcess = ProcessBuilder("docker", "start", containerId!!)
+                .redirectErrorStream(true)
+                .start()
+            val startOutput = startProcess.inputStream.bufferedReader().readText().trim()
+            val startExit = startProcess.waitFor()
+
+            if (startExit == 0) {
+                logger.info("Sandbox session '{}' ({}) started: container={}", label, id, containerId)
+                return
+            }
+
+            lastError = startOutput
+            if (attempt < maxRetries) {
+                logger.warn(
+                    "Failed to start container (attempt {}/{}): {}. Retrying...",
+                    attempt, maxRetries, startOutput
+                )
+                Thread.sleep(100L * attempt) // Backoff: 100ms, 200ms
+            }
         }
 
-        logger.info("Sandbox session '{}' ({}) started: container={}", label, id, containerId)
+        state = SandboxSession.SessionState.CLOSED
+        throw RuntimeException("Failed to start sandbox container after $maxRetries attempts: $lastError")
     }
 
     override fun execute(request: ExecutionRequest): ExecutionResult {
