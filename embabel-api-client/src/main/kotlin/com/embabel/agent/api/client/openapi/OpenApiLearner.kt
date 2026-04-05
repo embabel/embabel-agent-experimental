@@ -96,7 +96,7 @@ class OpenApiLearner : ApiLearner {
          * Parse an OpenAPI spec from raw content. If [rawContent] is provided,
          * parses from the string directly; otherwise fetches from [source].
          */
-        internal fun parseSpec(source: String, rawContent: String? = null): OpenAPI {
+        fun parseSpec(source: String, rawContent: String? = null): OpenAPI {
             val parseOptions = ParseOptions().apply {
                 isResolve = true
             }
