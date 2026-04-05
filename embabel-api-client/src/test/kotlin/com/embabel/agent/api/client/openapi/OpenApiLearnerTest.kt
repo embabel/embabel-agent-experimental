@@ -95,7 +95,8 @@ class OpenApiLearnerTest {
     fun `call returns enabled tools message`() {
         val result = learned().create().call("")
         assertInstanceOf(Tool.Result.Text::class.java, result)
-        assertTrue((result as Tool.Result.Text).content.contains("Enabled"))
+        val content = (result as Tool.Result.Text).content
+        assertTrue(content.contains("Tools now available")) { "Expected tools message in: $content" }
     }
 
     @Test

@@ -253,7 +253,10 @@ class DockerSandboxSession(
         val process = ProcessBuilder("docker", "pause", cid)
             .redirectErrorStream(true)
             .start()
-        process.waitFor(10, TimeUnit.SECONDS)
+        val output = process.inputStream.bufferedReader().readText().trim()
+        if (process.waitFor() != 0) {
+            throw RuntimeException("Failed to pause container: $output")
+        }
 
         state = SandboxSession.SessionState.PAUSED
         logger.info("Session '{}' ({}) paused", label, id)
