@@ -26,7 +26,7 @@ import kotlin.time.measureTime
 /**
  * Docker-backed [SandboxSession] that maintains a long-lived container.
  *
- * The container is created with `docker create` and started with `docker start`.
+ * The container is created and started atomically with `docker run -d`.
  * Commands are executed via `docker exec`. State (files, packages, env) persists
  * across executions. The container can be paused (`docker pause`) and resumed
  * (`docker unpause`) without losing any state including tmpfs mounts.
@@ -68,9 +68,16 @@ class DockerSandboxSession(
         startContainer()
     }
 
+    /**
+     * Creates and starts the container atomically using `docker run -d`.
+     *
+     * Uses `docker run -d` instead of separate `docker create` + `docker start`
+     * to avoid race conditions in CI environments where the container could
+     * disappear between the two commands.
+     */
     private fun startContainer() {
         val cmd = mutableListOf(
-            "docker", "create",
+            "docker", "run", "-d",
             "--name", containerName,
         )
 
@@ -96,39 +103,11 @@ class DockerSandboxSession(
 
         if (exitCode != 0) {
             state = SandboxSession.SessionState.CLOSED
-            throw RuntimeException("Failed to create sandbox container: $output")
+            throw RuntimeException("Failed to start sandbox container: $output")
         }
 
         containerId = output.take(12)
-
-        // Start the container with retry logic for transient Docker daemon issues
-        val maxRetries = 3
-        var lastError: String? = null
-
-        for (attempt in 1..maxRetries) {
-            val startProcess = ProcessBuilder("docker", "start", containerId!!)
-                .redirectErrorStream(true)
-                .start()
-            val startOutput = startProcess.inputStream.bufferedReader().readText().trim()
-            val startExit = startProcess.waitFor()
-
-            if (startExit == 0) {
-                logger.info("Sandbox session '{}' ({}) started: container={}", label, id, containerId)
-                return
-            }
-
-            lastError = startOutput
-            if (attempt < maxRetries) {
-                logger.warn(
-                    "Failed to start container (attempt {}/{}): {}. Retrying...",
-                    attempt, maxRetries, startOutput
-                )
-                Thread.sleep(100L * attempt) // Backoff: 100ms, 200ms
-            }
-        }
-
-        state = SandboxSession.SessionState.CLOSED
-        throw RuntimeException("Failed to start sandbox container after $maxRetries attempts: $lastError")
+        logger.info("Sandbox session '{}' ({}) started: container={}", label, id, containerId)
     }
 
     override fun execute(request: ExecutionRequest): ExecutionResult {
