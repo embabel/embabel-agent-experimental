@@ -22,13 +22,37 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.net.Socket
 
 /**
- * Tests for simple RestServer.
- * Not run under CI
+ * Integration tests for [RestServer] communication with external REST API server.
+ *
+ * **Prerequisites:** Requires an external server running on `localhost:8000`.
+ * Tests are skipped automatically if the server is not available.
+ *
+ * Not run under CI - use `mvn -Dtest=*IT test` to run manually.
  */
 class RestServerIT {
+
+    @BeforeEach
+    fun checkServerAvailable() {
+        assumeTrue(
+            isServerAvailable(),
+            "Skipping: external server not available on localhost:8000"
+        )
+    }
+
+    /**
+     * Checks if the required REST server is listening on localhost:8000.
+     */
+    private fun isServerAvailable(): Boolean = try {
+        Socket("localhost", 8000).use { true }
+    } catch (e: Exception) {
+        false
+    }
 
     @Test
     fun testConnection() {
