@@ -17,19 +17,27 @@ package com.embabel.agent.api.client
 
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.common.core.types.Timestamped
+import com.fasterxml.jackson.annotation.JsonIgnore
 import java.time.Instant
 
 /**
  * The result of an [ApiLearner] learning an API. Describes what was learned
  * (name, description, auth requirements) and provides a [create]
- * method to produce a usable [com.embabel.agent.api.tool.progressive.ProgressiveTool] once credentials are supplied.
+ * method to produce a usable [ProgressiveTool] once credentials are supplied.
+ *
+ * Includes a serializable [spec] so that the learned API can be persisted to disk
+ * and reconstructed without re-fetching the remote spec. The [spec] uses
+ * FQN-based polymorphic serialization via [LearnedApiSpec].
  */
 data class LearnedApi(
     val name: String,
     val description: String,
     val authRequirements: List<AuthRequirement>,
-    private val factory: (ApiCredentials) -> ProgressiveTool,
-): Timestamped {
+    val spec: LearnedApiSpec? = null,
+    @JsonIgnore
+    private val factory: (ApiCredentials) -> ProgressiveTool = spec?.toFactory()
+        ?: throw IllegalArgumentException("Either factory or spec must be provided"),
+) : Timestamped {
 
     override val timestamp: Instant = Instant.now()
 

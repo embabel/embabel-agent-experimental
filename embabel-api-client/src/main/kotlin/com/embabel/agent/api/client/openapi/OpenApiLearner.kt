@@ -19,7 +19,6 @@ import com.embabel.agent.api.client.*
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.agent.api.tool.progressive.UnfoldingTool
-import com.embabel.agent.core.AgentProcess
 import io.swagger.v3.oas.models.OpenAPI
 import io.swagger.v3.oas.models.security.SecurityScheme
 import io.swagger.parser.OpenAPIParser
@@ -48,137 +47,64 @@ import org.springframework.web.client.RestClient
 class OpenApiLearner : ApiLearner {
 
     override fun learn(source: String): LearnedApi {
-        val openApi = parseSpec(source)
+        val rawSpec = fetchRawSpec(source)
+        val openApi = parseSpec(source, rawSpec)
 
         val name = deriveApiName(openApi)
         val description = deriveApiDescription(openApi, source)
         val authRequirements = extractAuthRequirements(openApi)
+        val spec = LearnedApiSpec.OpenApi(source = source, rawSpec = rawSpec)
 
         return LearnedApi(
             name = name,
             description = description,
             authRequirements = authRequirements,
+            spec = spec,
             factory = { credentials -> buildTool(source, openApi, credentials) },
         )
-    }
-
-    private fun buildTool(
-        source: String,
-        openApi: OpenAPI,
-        credentials: ApiCredentials,
-    ): ProgressiveTool {
-        val baseUrl = resolveBaseUrl(openApi, source)
-        val restClient = buildRestClient(openApi, credentials)
-        val allTools = materializeTools(openApi, baseUrl, restClient)
-        val toolsByTag = groupByTag(openApi, allTools)
-
-        val apiName = deriveApiName(openApi)
-        val apiDescription = deriveApiDescription(openApi, source)
-
-        logger.info(
-            "Learned API '{}' from {}: {} operations in {} tags",
-            apiName, source, allTools.size, toolsByTag.size,
-        )
-
-        val delegate = if (toolsByTag.size == 1) {
-            UnfoldingTool.of(
-                name = apiName,
-                description = apiDescription,
-                innerTools = allTools.values.toList(),
-            )
-        } else {
-            UnfoldingTool.byCategory(
-                name = apiName,
-                description = apiDescription,
-                toolsByCategory = toolsByTag.mapValues { it.value.toList() },
-                removeOnInvoke = false,
-            )
-        }
-
-        return delegate
-    }
-
-    private fun buildRestClient(
-        openApi: OpenAPI,
-        credentials: ApiCredentials,
-    ): RestClient {
-        val httpClient = java.net.http.HttpClient.newBuilder()
-            .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-            .build()
-        val requestFactory = org.springframework.http.client.JdkClientHttpRequestFactory(httpClient)
-        val builder = RestClient.builder().requestFactory(requestFactory)
-        applyCredentials(builder, openApi, credentials)
-        return builder.build()
-    }
-
-    private fun applyCredentials(
-        builder: RestClient.Builder,
-        openApi: OpenAPI,
-        credentials: ApiCredentials,
-    ) {
-        when (credentials) {
-            is ApiCredentials.None -> {}
-
-            is ApiCredentials.Token -> {
-                builder.defaultHeader("Authorization", "Bearer ${credentials.token}")
-            }
-
-            is ApiCredentials.ApiKey -> {
-                val apiKeyScheme = openApi.components?.securitySchemes?.values
-                    ?.filterIsInstance<SecurityScheme>()
-                    ?.find { it.type == SecurityScheme.Type.APIKEY }
-
-                if (apiKeyScheme != null) {
-                    when (apiKeyScheme.`in`) {
-                        SecurityScheme.In.HEADER ->
-                            builder.defaultHeader(apiKeyScheme.name, credentials.value)
-                        SecurityScheme.In.QUERY ->
-                            builder.requestInterceptor { request, body, execution ->
-                                val uri = request.uri
-                                val separator = if (uri.query != null) "&" else "?"
-                                val newUri = java.net.URI("${uri}${separator}${apiKeyScheme.name}=${credentials.value}")
-                                execution.execute(
-                                    object : org.springframework.http.HttpRequest by request {
-                                        override fun getURI() = newUri
-                                    },
-                                    body,
-                                )
-                            }
-                        SecurityScheme.In.COOKIE ->
-                            builder.defaultHeader("Cookie", "${apiKeyScheme.name}=${credentials.value}")
-                        else ->
-                            builder.defaultHeader(apiKeyScheme.name, credentials.value)
-                    }
-                } else {
-                    builder.defaultHeader("Authorization", credentials.value)
-                }
-            }
-
-            is ApiCredentials.CustomHeaders -> {
-                credentials.headers.forEach { (name, value) ->
-                    builder.defaultHeader(name, value)
-                }
-            }
-
-            is ApiCredentials.Multiple -> {
-                credentials.credentials.forEach { applyCredentials(builder, openApi, it) }
-            }
-
-            is ApiCredentials.OAuth2 -> {
-                builder.defaultHeader("Authorization", "Bearer ${credentials.accessToken}")
-            }
-        }
     }
 
     companion object {
 
         private val logger = LoggerFactory.getLogger(OpenApiLearner::class.java)
 
-        internal fun parseSpec(source: String): OpenAPI {
+        /**
+         * Fetch the raw spec content from a URL or file path.
+         */
+        internal fun fetchRawSpec(source: String): String {
+            val uri = java.net.URI(source)
+            if (uri.scheme == "file" || uri.scheme == null) {
+                // Local file — read directly
+                val path = if (uri.scheme == "file") java.nio.file.Path.of(uri) else java.nio.file.Path.of(source)
+                return java.nio.file.Files.readString(path)
+            }
+            val httpClient = java.net.http.HttpClient.newBuilder()
+                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+                .build()
+            val request = java.net.http.HttpRequest.newBuilder()
+                .uri(uri)
+                .GET()
+                .build()
+            val response = httpClient.send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() !in 200..299) {
+                throw IllegalArgumentException("Failed to fetch spec from $source: HTTP ${response.statusCode()}")
+            }
+            return response.body()
+        }
+
+        /**
+         * Parse an OpenAPI spec from raw content. If [rawContent] is provided,
+         * parses from the string directly; otherwise fetches from [source].
+         */
+        internal fun parseSpec(source: String, rawContent: String? = null): OpenAPI {
             val parseOptions = ParseOptions().apply {
                 isResolve = true
             }
-            val result = OpenAPIParser().readLocation(source, null, parseOptions)
+            val result = if (rawContent != null) {
+                OpenAPIParser().readContents(rawContent, null, parseOptions)
+            } else {
+                OpenAPIParser().readLocation(source, null, parseOptions)
+            }
 
             if (result.openAPI == null) {
                 val errors = result.messages?.joinToString("; ") ?: "Unknown error"
@@ -186,6 +112,116 @@ class OpenApiLearner : ApiLearner {
             }
 
             return result.openAPI
+        }
+
+        /**
+         * Build a [ProgressiveTool] from a parsed OpenAPI spec.
+         * Called by both the learner and [LearnedApiSpec.OpenApi.toFactory].
+         */
+        fun buildTool(
+            source: String,
+            openApi: OpenAPI,
+            credentials: ApiCredentials,
+        ): ProgressiveTool {
+            val baseUrl = resolveBaseUrl(openApi, source)
+            val restClient = buildRestClient(openApi, credentials)
+            val allTools = materializeTools(openApi, baseUrl, restClient)
+            val toolsByTag = groupByTag(openApi, allTools)
+
+            val apiName = deriveApiName(openApi)
+            val apiDescription = deriveApiDescription(openApi, source)
+
+            logger.info(
+                "Learned API '{}' from {}: {} operations in {} tags",
+                apiName, source, allTools.size, toolsByTag.size,
+            )
+
+            return if (toolsByTag.size == 1) {
+                UnfoldingTool.of(
+                    name = apiName,
+                    description = apiDescription,
+                    innerTools = allTools.values.toList(),
+                )
+            } else {
+                UnfoldingTool.byCategory(
+                    name = apiName,
+                    description = apiDescription,
+                    toolsByCategory = toolsByTag.mapValues { it.value.toList() },
+                    removeOnInvoke = false,
+                )
+            }
+        }
+
+        private fun buildRestClient(
+            openApi: OpenAPI,
+            credentials: ApiCredentials,
+        ): RestClient {
+            val httpClient = java.net.http.HttpClient.newBuilder()
+                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+                .build()
+            val requestFactory = org.springframework.http.client.JdkClientHttpRequestFactory(httpClient)
+            val builder = RestClient.builder().requestFactory(requestFactory)
+            applyCredentials(builder, openApi, credentials)
+            return builder.build()
+        }
+
+        private fun applyCredentials(
+            builder: RestClient.Builder,
+            openApi: OpenAPI,
+            credentials: ApiCredentials,
+        ) {
+            when (credentials) {
+                is ApiCredentials.None -> {}
+
+                is ApiCredentials.Token -> {
+                    builder.defaultHeader("Authorization", "Bearer ${credentials.token}")
+                }
+
+                is ApiCredentials.ApiKey -> {
+                    val apiKeyScheme = openApi.components?.securitySchemes?.values
+                        ?.filterIsInstance<SecurityScheme>()
+                        ?.find { it.type == SecurityScheme.Type.APIKEY }
+
+                    if (apiKeyScheme != null) {
+                        when (apiKeyScheme.`in`) {
+                            SecurityScheme.In.HEADER ->
+                                builder.defaultHeader(apiKeyScheme.name, credentials.value)
+                            SecurityScheme.In.QUERY ->
+                                builder.requestInterceptor { request, body, execution ->
+                                    val uri = request.uri
+                                    val separator = if (uri.query != null) "&" else "?"
+                                    val newUri = java.net.URI("${uri}${separator}${apiKeyScheme.name}=${credentials.value}")
+                                    execution.execute(
+                                        object : org.springframework.http.HttpRequest by request {
+                                            override fun getURI() = newUri
+                                        },
+                                        body,
+                                    )
+                                }
+                            SecurityScheme.In.COOKIE ->
+                                builder.defaultHeader("Cookie", "${apiKeyScheme.name}=${credentials.value}")
+                            else ->
+                                builder.defaultHeader(apiKeyScheme.name, credentials.value)
+                        }
+                    } else {
+                        builder.defaultHeader("Authorization", credentials.value)
+                    }
+                }
+
+                is ApiCredentials.CustomHeaders -> {
+                    credentials.headers.forEach { (name, value) ->
+                        builder.defaultHeader(name, value)
+                    }
+                }
+
+                is ApiCredentials.Multiple -> {
+                    credentials.credentials.forEach { applyCredentials(builder, openApi, it) }
+                }
+
+                is ApiCredentials.OAuth2 -> {
+                    builder.defaultHeader("Authorization", "Bearer ${credentials.accessToken}")
+                }
+            }
         }
 
         internal fun extractAuthRequirements(openApi: OpenAPI): List<AuthRequirement> {
@@ -226,6 +262,7 @@ class OpenApiLearner : ApiLearner {
         }
 
         internal fun resolveBaseUrl(openApi: OpenAPI, source: String): String {
+            // Check top-level servers first
             val serverUrl = openApi.servers?.firstOrNull()?.url
 
             if (serverUrl != null) {
@@ -235,6 +272,15 @@ class OpenApiLearner : ApiLearner {
                 val sourceUri = java.net.URI(source)
                 val baseAuthority = "${sourceUri.scheme}://${sourceUri.authority}"
                 return baseAuthority + serverUrl
+            }
+
+            // Check path-level servers (some specs define servers per-path, not globally)
+            val pathServerUrl = openApi.paths?.values?.firstOrNull()
+                ?.servers?.firstOrNull()?.url
+            if (pathServerUrl != null &&
+                (pathServerUrl.startsWith("http://") || pathServerUrl.startsWith("https://"))
+            ) {
+                return pathServerUrl
             }
 
             val sourceUri = java.net.URI(source)
