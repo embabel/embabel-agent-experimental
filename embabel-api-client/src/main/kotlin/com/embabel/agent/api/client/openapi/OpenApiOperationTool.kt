@@ -66,13 +66,13 @@ class OpenApiOperationTool(
 
             val uri = buildUri(resolvedPath, queryParams)
 
-            logger.debug("Calling {} {}", httpMethod, uri)
+            logger.info("Calling {} {} (baseUrl={})", httpMethod, uri, baseUrl)
 
             val response = executeRequest(uri, body)
             Tool.Result.text(response ?: "")
         } catch (e: RestClientResponseException) {
             val errorBody = e.responseBodyAsString
-            val message = "HTTP ${e.statusCode.value()} from $httpMethod $path: $errorBody"
+            val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path: ${errorBody.take(200)}"
             logger.warn(message)
             Tool.Result.error(message, e)
         } catch (e: Exception) {

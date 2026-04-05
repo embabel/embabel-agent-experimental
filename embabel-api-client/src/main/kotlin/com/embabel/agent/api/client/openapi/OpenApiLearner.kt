@@ -262,16 +262,14 @@ class OpenApiLearner : ApiLearner {
         }
 
         internal fun resolveBaseUrl(openApi: OpenAPI, source: String): String {
-            // Check top-level servers first
+            // Check top-level servers first (ignore auto-generated "/" placeholder)
             val serverUrl = openApi.servers?.firstOrNull()?.url
+                ?.takeIf { it != "/" }
 
             if (serverUrl != null) {
                 if (serverUrl.startsWith("http://") || serverUrl.startsWith("https://")) {
                     return serverUrl
                 }
-                val sourceUri = java.net.URI(source)
-                val baseAuthority = "${sourceUri.scheme}://${sourceUri.authority}"
-                return baseAuthority + serverUrl
             }
 
             // Check path-level servers (some specs define servers per-path, not globally)
@@ -281,6 +279,13 @@ class OpenApiLearner : ApiLearner {
                 (pathServerUrl.startsWith("http://") || pathServerUrl.startsWith("https://"))
             ) {
                 return pathServerUrl
+            }
+
+            // Relative server URL — resolve against source
+            if (serverUrl != null) {
+                val sourceUri = java.net.URI(source)
+                val baseAuthority = "${sourceUri.scheme}://${sourceUri.authority}"
+                return baseAuthority + serverUrl
             }
 
             val sourceUri = java.net.URI(source)

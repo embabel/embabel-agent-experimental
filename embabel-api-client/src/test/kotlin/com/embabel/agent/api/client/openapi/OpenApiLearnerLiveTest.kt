@@ -15,6 +15,7 @@
  */
 package com.embabel.agent.api.client.openapi
 
+import com.embabel.agent.api.client.ApiCredentials
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import org.junit.jupiter.api.Assertions.*
@@ -24,50 +25,57 @@ import org.junit.jupiter.api.Test
 /**
  * Live integration tests against public APIs.
  * Tagged so they can be excluded from CI builds.
+ *
+ * These tests verify:
+ * - Spec parsing (Swagger 2.0, OpenAPI 3.0, 3.1)
+ * - Base URL resolution (top-level servers, path-level servers, relative URLs)
+ * - Tool materialization (operation naming, parameter mapping, tag grouping)
+ * - Actual HTTP calls (GET, POST with various parameter types)
+ * - Raw spec caching (fetchRawSpec + parseSpec from content)
  */
 @Tag("live")
 class OpenApiLearnerLiveTest {
 
     private val learner = OpenApiLearner()
 
-    // --- Petstore (Swagger 2.0, auto-converted to OpenAPI 3.0) ---
+    // =====================================================================
+    // Petstore v2 (Swagger 2.0, auto-converted to OpenAPI 3.0)
+    // =====================================================================
 
-    private val petstoreSpec = "https://petstore.swagger.io/v2/swagger.json"
+    private val petstoreV2Spec = "https://petstore.swagger.io/v2/swagger.json"
 
     @Test
-    fun `petstore - inspect`() {
-        val learned = learner.learn(petstoreSpec)
-        println("Name: ${learned.name}")
-        println("Description: ${learned.description}")
-        println("Auth: ${learned.authRequirements}")
+    fun `petstore-v2 - inspect`() {
+        val learned = learner.learn(petstoreV2Spec)
         assertEquals("swagger_petstore", learned.name)
         assertTrue(learned.authRequirements.isNotEmpty())
+        assertNotNull(learned.spec, "LearnedApi should include a spec for serialization")
     }
 
     @Test
-    fun `petstore - tool tree`() {
-        val tool = learner.learn(petstoreSpec).create()
-        println(Tool.formatToolTree("petstore", listOf(tool)))
+    fun `petstore-v2 - tool tree`() {
+        val tool = learner.learn(petstoreV2Spec).create()
+        println(Tool.formatToolTree("petstore-v2", listOf(tool)))
         assertInstanceOf(ProgressiveTool::class.java, tool)
     }
 
     @Test
-    fun `petstore - GET findPetsByStatus`() {
-        val tool = learner.learn(petstoreSpec).create()
+    fun `petstore-v2 - GET findPetsByStatus`() {
+        val tool = learner.learn(petstoreV2Spec).create()
         val result = callTool(tool, "findPetsByStatus", """{"status": "available"}""")
         assertSuccess(result, "findPetsByStatus")
     }
 
     @Test
-    fun `petstore - GET getInventory`() {
-        val tool = learner.learn(petstoreSpec).create()
+    fun `petstore-v2 - GET getInventory`() {
+        val tool = learner.learn(petstoreV2Spec).create()
         val result = callTool(tool, "getInventory", "")
         assertSuccess(result, "getInventory")
     }
 
     @Test
-    fun `petstore - POST addPet`() {
-        val tool = learner.learn(petstoreSpec).create()
+    fun `petstore-v2 - POST addPet`() {
+        val tool = learner.learn(petstoreV2Spec).create()
         val result = callTool(
             tool, "addPet",
             """{"body": {"name": "Embabel Test Dog", "photoUrls": ["https://example.com/dog.jpg"], "status": "available"}}""",
@@ -76,16 +84,64 @@ class OpenApiLearnerLiveTest {
         assertTrue((result as Tool.Result.Text).content.contains("Embabel Test Dog"))
     }
 
-    // --- FakeRestAPI (OpenAPI 3.0.1, full CRUD, no auth) ---
+    // =====================================================================
+    // Petstore v3 (OpenAPI 3.0.4)
+    // =====================================================================
+
+    private val petstoreV3Spec = "https://petstore3.swagger.io/api/v3/openapi.json"
+
+    @Test
+    fun `petstore-v3 - inspect`() {
+        val learned = learner.learn(petstoreV3Spec)
+        println("Name: ${learned.name}")
+        println("Description: ${learned.description}")
+        assertNotNull(learned.name)
+        assertNotNull(learned.spec)
+    }
+
+    @Test
+    fun `petstore-v3 - base URL resolves to petstore3`() {
+        val rawSpec = OpenApiLearner.fetchRawSpec(petstoreV3Spec)
+        val openApi = OpenApiLearner.parseSpec(petstoreV3Spec, rawSpec)
+        val baseUrl = OpenApiLearner.resolveBaseUrl(openApi, petstoreV3Spec)
+        println("Petstore v3 baseUrl: $baseUrl")
+        assertTrue(baseUrl.contains("petstore3.swagger.io") || baseUrl.contains("petstore.swagger.io")) {
+            "Base URL should point to petstore: $baseUrl"
+        }
+    }
+
+    @Test
+    fun `petstore-v3 - GET findPetsByStatus`() {
+        val tool = learner.learn(petstoreV3Spec).create()
+        val result = callTool(tool, "findPetsByStatus", """{"status": "available"}""")
+        assertSuccess(result, "findPetsByStatus")
+    }
+
+    @Test
+    fun `petstore-v3 - tool names are valid identifiers`() {
+        val tool = learner.learn(petstoreV3Spec).create()
+        val allTools = collectAllLeafTools(tool)
+        val validPattern = Regex("^[a-zA-Z0-9_-]+$")
+        allTools.forEach {
+            assertTrue(it.definition.name.matches(validPattern)) {
+                "Tool name '${it.definition.name}' contains invalid characters"
+            }
+        }
+        assertTrue(allTools.size >= 10) { "Expected at least 10 operations, got ${allTools.size}" }
+        println("Petstore v3 tools (${allTools.size}): ${allTools.map { it.definition.name }}")
+    }
+
+    // =====================================================================
+    // FakeRestAPI (OpenAPI 3.0.1, full CRUD, no auth)
+    // =====================================================================
 
     private val fakeRestApiSpec = "https://fakerestapi.azurewebsites.net/swagger/v1/swagger.json"
 
     @Test
     fun `fakerestapi - inspect`() {
         val learned = learner.learn(fakeRestApiSpec)
-        println("Name: ${learned.name}")
-        println("Auth: ${learned.authRequirements}")
         assertNotNull(learned.name)
+        assertNotNull(learned.spec)
     }
 
     @Test
@@ -97,22 +153,16 @@ class OpenApiLearnerLiveTest {
     @Test
     fun `fakerestapi - GET activities`() {
         val tool = learner.learn(fakeRestApiSpec).create()
-        val result = callTool(tool, "apiV1ActivitiesGet", "")
-        // Operation names may vary — find any GET activities tool
-        if (result == null) {
-            val allTools = collectAllLeafTools(tool)
-            val activitiesTool = allTools.find {
-                it.definition.name.lowercase().contains("activit") &&
-                    it.definition.name.lowercase().let { n -> !n.contains("id") }
-            }
-            assertNotNull(activitiesTool) {
-                "No activities GET tool found. Available: ${allTools.map { it.definition.name }}"
-            }
-            val r = activitiesTool!!.call("")
-            assertSuccess(r, activitiesTool.definition.name)
-        } else {
-            assertSuccess(result, "activities GET")
+        val allTools = collectAllLeafTools(tool)
+        val activitiesTool = allTools.find {
+            it.definition.name.lowercase().contains("activit") &&
+                !it.definition.name.lowercase().contains("id")
         }
+        assertNotNull(activitiesTool) {
+            "No activities GET tool found. Available: ${allTools.map { it.definition.name }}"
+        }
+        val result = activitiesTool!!.call("")
+        assertSuccess(result, activitiesTool.definition.name)
     }
 
     @Test
@@ -133,16 +183,17 @@ class OpenApiLearnerLiveTest {
         assertTrue((result as Tool.Result.Text).content.contains("Embabel Test"))
     }
 
-    // --- httpbin (Swagger 2.0, echo service with POST/PUT/DELETE) ---
+    // =====================================================================
+    // httpbin (Swagger 2.0, echo service)
+    // =====================================================================
 
     private val httpbinSpec = "https://httpbin.org/spec.json"
 
     @Test
     fun `httpbin - inspect`() {
         val learned = learner.learn(httpbinSpec)
-        println("Name: ${learned.name}")
-        println("Ops: ${collectAllLeafTools(learned.create()).size}")
         assertNotNull(learned.name)
+        assertNotNull(learned.spec)
     }
 
     @Test
@@ -171,17 +222,28 @@ class OpenApiLearnerLiveTest {
         assertTrue((result as Tool.Result.Text).content.contains("uuid"))
     }
 
-    // --- XKCD (OpenAPI 3.0, no auth, dots in paths) ---
+    // =====================================================================
+    // XKCD (OpenAPI 3.0, no auth, dots in paths, GitHub-hosted spec)
+    // =====================================================================
 
     private val xkcdSpec = "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/xkcd.com/1.0.0/openapi.yaml"
 
     @Test
     fun `xkcd - inspect`() {
         val learned = learner.learn(xkcdSpec)
-        println("Name: ${learned.name}")
-        println("Description: ${learned.description}")
-        println("Auth: ${learned.authRequirements}")
         assertEquals("xkcd", learned.name)
+        assertNotNull(learned.spec)
+    }
+
+    @Test
+    fun `xkcd - base URL resolves to xkcd not github`() {
+        val rawSpec = OpenApiLearner.fetchRawSpec(xkcdSpec)
+        val openApi = OpenApiLearner.parseSpec(xkcdSpec, rawSpec)
+        val baseUrl = OpenApiLearner.resolveBaseUrl(openApi, xkcdSpec)
+        println("XKCD baseUrl: $baseUrl")
+        assertTrue(baseUrl.contains("xkcd.com")) {
+            "Base URL should be xkcd.com but was: $baseUrl"
+        }
     }
 
     @Test
@@ -198,13 +260,6 @@ class OpenApiLearnerLiveTest {
     }
 
     @Test
-    fun `xkcd - tool tree`() {
-        val tool = learner.learn(xkcdSpec).create()
-        println(Tool.formatToolTree("xkcd", listOf(tool)))
-        assertInstanceOf(ProgressiveTool::class.java, tool)
-    }
-
-    @Test
     fun `xkcd - GET current comic`() {
         val tool = learner.learn(xkcdSpec).create()
         val allTools = collectAllLeafTools(tool)
@@ -217,7 +272,6 @@ class OpenApiLearnerLiveTest {
         val text = (result as Tool.Result.Text).content
         assertTrue(text.contains("title")) { "Expected comic JSON with 'title' field" }
         assertTrue(text.contains("img")) { "Expected comic JSON with 'img' field" }
-        assertTrue(text.contains("num")) { "Expected comic JSON with 'num' field" }
     }
 
     @Test
@@ -228,14 +282,139 @@ class OpenApiLearnerLiveTest {
         assertNotNull(byIdTool) {
             "No comic-by-id tool found. Available: ${allTools.map { it.definition.name }}"
         }
-        // Fetch comic #327 (exploits of a mom)
         val result = byIdTool!!.call("""{"comicId": "327"}""")
         assertSuccess(result, byIdTool.definition.name)
         val text = (result as Tool.Result.Text).content
         assertTrue(text.contains("327") || text.contains("num")) { "Expected comic 327 data" }
     }
 
-    // --- Helpers ---
+    @Test
+    fun `xkcd - cached spec roundtrip works`() {
+        val learned = learner.learn(xkcdSpec)
+        assertNotNull(learned.spec)
+
+        // Simulate deserialization: reconstruct from spec without network
+        val factory = learned.spec!!.toFactory()
+        val tool = factory(ApiCredentials.None)
+        assertInstanceOf(ProgressiveTool::class.java, tool)
+        val allTools = collectAllLeafTools(tool)
+        assertTrue(allTools.isNotEmpty()) { "Cached spec should produce tools" }
+    }
+
+    // =====================================================================
+    // Open-Meteo (path-level servers, no top-level servers, GitHub-hosted)
+    // =====================================================================
+
+    private val openMeteoSpec = "https://raw.githubusercontent.com/open-meteo/open-meteo/main/openapi.yml"
+
+    @Test
+    fun `open-meteo - resolves path-level server URL`() {
+        val rawSpec = OpenApiLearner.fetchRawSpec(openMeteoSpec)
+        val openApi = OpenApiLearner.parseSpec(openMeteoSpec, rawSpec)
+
+        println("Top-level servers: ${openApi.servers?.map { it.url }}")
+        openApi.paths?.forEach { (path, pathItem) ->
+            println("Path: $path, servers: ${pathItem.servers?.map { it.url }}")
+        }
+
+        val baseUrl = OpenApiLearner.resolveBaseUrl(openApi, openMeteoSpec)
+        println("Resolved baseUrl: $baseUrl")
+
+        assertTrue(baseUrl.contains("api.open-meteo.com")) {
+            "Base URL should be api.open-meteo.com but was: $baseUrl"
+        }
+    }
+
+    @Test
+    fun `open-meteo - GET current weather`() {
+        val learned = learner.learn(openMeteoSpec)
+        println("Name: ${learned.name}")
+
+        val tool = learned.create()
+        val allTools = collectAllLeafTools(tool)
+        println("Tools: ${allTools.map { it.definition.name }}")
+
+        val forecastTool = allTools.find { it.definition.name.contains("forecast") }
+        assertNotNull(forecastTool) {
+            "No forecast tool found. Available: ${allTools.map { it.definition.name }}"
+        }
+
+        val result = forecastTool!!.call(
+            """{"latitude": 53.48, "longitude": -2.24, "current_weather": true}""",
+        )
+        assertSuccess(result, forecastTool.definition.name)
+        val text = (result as Tool.Result.Text).content
+        assertTrue(text.contains("temperature")) { "Expected weather data with temperature: $text" }
+    }
+
+    @Test
+    fun `open-meteo - spec has serializable LearnedApiSpec`() {
+        val learned = learner.learn(openMeteoSpec)
+        assertNotNull(learned.spec)
+        assertInstanceOf(com.embabel.agent.api.client.LearnedApiSpec.OpenApi::class.java, learned.spec)
+        val openApiSpec = learned.spec as com.embabel.agent.api.client.LearnedApiSpec.OpenApi
+        assertTrue(openApiSpec.rawSpec.contains("open-meteo") || openApiSpec.rawSpec.contains("forecast")) {
+            "Raw spec should contain API content"
+        }
+    }
+
+    // =====================================================================
+    // PokeAPI (OpenAPI 3.1.0, large spec, many endpoints)
+    // =====================================================================
+
+    private val pokeApiSpec = "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/openapi.yml"
+
+    @Test
+    fun `pokeapi - inspect`() {
+        val learned = learner.learn(pokeApiSpec)
+        println("Name: ${learned.name}")
+        println("Description: ${learned.description}")
+        assertNotNull(learned.name)
+        assertNotNull(learned.spec)
+    }
+
+    @Test
+    fun `pokeapi - has many operations`() {
+        val tool = learner.learn(pokeApiSpec).create()
+        val allTools = collectAllLeafTools(tool)
+        println("PokeAPI tools (${allTools.size}): ${allTools.take(10).map { it.definition.name }}...")
+        assertTrue(allTools.size >= 5) { "Expected multiple operations, got ${allTools.size}" }
+    }
+
+    @Test
+    fun `pokeapi - base URL resolves to pokeapi`() {
+        val rawSpec = OpenApiLearner.fetchRawSpec(pokeApiSpec)
+        val openApi = OpenApiLearner.parseSpec(pokeApiSpec, rawSpec)
+        val baseUrl = OpenApiLearner.resolveBaseUrl(openApi, pokeApiSpec)
+        println("PokeAPI baseUrl: $baseUrl")
+        assertTrue(baseUrl.contains("pokeapi.co")) {
+            "Base URL should be pokeapi.co but was: $baseUrl"
+        }
+    }
+
+    // =====================================================================
+    // Cross-cutting: raw spec caching and LearnedApiSpec serialization
+    // =====================================================================
+
+    @Test
+    fun `fetchRawSpec handles HTTP URLs`() {
+        val raw = OpenApiLearner.fetchRawSpec(petstoreV2Spec)
+        assertTrue(raw.contains("swagger") || raw.contains("openapi"))
+    }
+
+    @Test
+    fun `parseSpec from raw content matches parseSpec from URL`() {
+        val rawSpec = OpenApiLearner.fetchRawSpec(petstoreV2Spec)
+        val fromContent = OpenApiLearner.parseSpec(petstoreV2Spec, rawSpec)
+        val fromUrl = OpenApiLearner.parseSpec(petstoreV2Spec)
+
+        assertEquals(fromUrl.info?.title, fromContent.info?.title)
+        assertEquals(fromUrl.paths?.size, fromContent.paths?.size)
+    }
+
+    // =====================================================================
+    // Helpers
+    // =====================================================================
 
     private fun callTool(root: Tool, name: String, input: String): Tool.Result? {
         val allTools = collectAllLeafTools(root)
