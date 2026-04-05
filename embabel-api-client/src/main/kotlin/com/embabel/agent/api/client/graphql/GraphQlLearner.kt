@@ -63,77 +63,22 @@ class GraphQlLearner(
             "GraphQL API at $source"
         }
 
+        val spec = LearnedApiSpec.GraphQl(
+            source = source,
+            apiName = name,
+            queryTypeName = rootTypes.queryTypeName,
+            mutationTypeName = rootTypes.mutationTypeName,
+        )
+
         return LearnedApi(
             name = name,
             description = description,
             authRequirements = defaultAuthRequirements,
+            spec = spec,
             factory = { credentials ->
-                buildTool(source, name, rootTypes.queryTypeName, rootTypes.mutationTypeName, credentials, objectMapper)
+                buildTool(source, name, rootTypes.queryTypeName, rootTypes.mutationTypeName, credentials)
             },
         )
-    }
-
-    private fun buildTool(
-        endpoint: String,
-        apiName: String,
-        queryTypeName: String?,
-        mutationTypeName: String?,
-        credentials: ApiCredentials,
-        objectMapper: ObjectMapper,
-    ): ProgressiveTool {
-        val restClient = buildApiClient(credentials)
-
-        val queryTools = if (queryTypeName != null) {
-            materializeTools(endpoint, queryTypeName, GraphQlOperationTool.OperationType.QUERY, restClient, objectMapper)
-        } else emptyList()
-
-        val mutationTools = if (mutationTypeName != null) {
-            materializeTools(endpoint, mutationTypeName, GraphQlOperationTool.OperationType.MUTATION, restClient, objectMapper)
-        } else emptyList()
-
-        logger.info(
-            "Learned GraphQL API '{}' from {}: {} queries, {} mutations",
-            apiName, endpoint, queryTools.size, mutationTools.size,
-        )
-
-        return if (mutationTools.isEmpty()) {
-            UnfoldingTool.of(
-                name = apiName,
-                description = "GraphQL API at $endpoint",
-                innerTools = queryTools,
-            )
-        } else {
-            UnfoldingTool.byCategory(
-                name = apiName,
-                description = "GraphQL API at $endpoint",
-                toolsByCategory = buildMap {
-                    if (queryTools.isNotEmpty()) put("queries", queryTools)
-                    if (mutationTools.isNotEmpty()) put("mutations", mutationTools)
-                },
-                removeOnInvoke = false,
-            )
-        }
-    }
-
-    private fun materializeTools(
-        endpoint: String,
-        typeName: String,
-        operationType: GraphQlOperationTool.OperationType,
-        restClient: RestClient,
-        objectMapper: ObjectMapper,
-    ): List<Tool> {
-        val fields = introspectFields(endpoint, typeName, restClient, objectMapper)
-        return fields.map { field ->
-            val selectionSet = buildSelectionSet(endpoint, field.type, restClient, objectMapper)
-            GraphQlOperationTool(
-                endpoint = endpoint,
-                field = field,
-                operationType = operationType,
-                selectionSet = selectionSet,
-                restClient = restClient,
-                objectMapper = objectMapper,
-            )
-        }
     }
 
     /**
@@ -148,6 +93,52 @@ class GraphQlLearner(
     companion object {
 
         private val logger = LoggerFactory.getLogger(GraphQlLearner::class.java)
+
+        /**
+         * Build a [ProgressiveTool] from GraphQL root type info.
+         * Called by both the learner and [LearnedApiSpec.GraphQl.toFactory].
+         */
+        fun buildTool(
+            endpoint: String,
+            apiName: String,
+            queryTypeName: String?,
+            mutationTypeName: String?,
+            credentials: ApiCredentials,
+        ): ProgressiveTool {
+            val objectMapper = jacksonObjectMapper()
+            val restClient = buildApiClient(credentials)
+
+            val queryTools = if (queryTypeName != null) {
+                materializeTools(endpoint, queryTypeName, GraphQlOperationTool.OperationType.QUERY, restClient, objectMapper)
+            } else emptyList()
+
+            val mutationTools = if (mutationTypeName != null) {
+                materializeTools(endpoint, mutationTypeName, GraphQlOperationTool.OperationType.MUTATION, restClient, objectMapper)
+            } else emptyList()
+
+            logger.info(
+                "Learned GraphQL API '{}' from {}: {} queries, {} mutations",
+                apiName, endpoint, queryTools.size, mutationTools.size,
+            )
+
+            return if (mutationTools.isEmpty()) {
+                UnfoldingTool.of(
+                    name = apiName,
+                    description = "GraphQL API at $endpoint",
+                    innerTools = queryTools,
+                )
+            } else {
+                UnfoldingTool.byCategory(
+                    name = apiName,
+                    description = "GraphQL API at $endpoint",
+                    toolsByCategory = buildMap {
+                        if (queryTools.isNotEmpty()) put("queries", queryTools)
+                        if (mutationTools.isNotEmpty()) put("mutations", mutationTools)
+                    },
+                    removeOnInvoke = false,
+                )
+            }
+        }
 
         internal fun deriveApiName(endpoint: String): String {
             return try {
@@ -191,6 +182,27 @@ class GraphQlLearner(
             }
 
             return builder.build()
+        }
+
+        private fun materializeTools(
+            endpoint: String,
+            typeName: String,
+            operationType: GraphQlOperationTool.OperationType,
+            restClient: RestClient,
+            objectMapper: ObjectMapper,
+        ): List<Tool> {
+            val fields = introspectFields(endpoint, typeName, restClient, objectMapper)
+            return fields.map { field ->
+                val selectionSet = buildSelectionSet(endpoint, field.type, restClient, objectMapper)
+                GraphQlOperationTool(
+                    endpoint = endpoint,
+                    field = field,
+                    operationType = operationType,
+                    selectionSet = selectionSet,
+                    restClient = restClient,
+                    objectMapper = objectMapper,
+                )
+            }
         }
 
         private fun executeGraphQl(
@@ -247,7 +259,6 @@ class GraphQlLearner(
             objectMapper: ObjectMapper,
         ): List<GraphQlField> {
             return try {
-                // Try full-depth introspection first
                 val data = executeGraphQl(endpoint, GraphQlIntrospection.fieldsQuery(typeName), restClient, objectMapper)
                 @Suppress("UNCHECKED_CAST")
                 val type = data["__type"] as? Map<String, Any?> ?: return emptyList()
@@ -267,7 +278,6 @@ class GraphQlLearner(
             restClient: RestClient,
             objectMapper: ObjectMapper,
         ): List<GraphQlField> {
-            // Fetch return types and args in separate shallow queries
             val returnData = executeGraphQl(endpoint, GraphQlIntrospection.shallowReturnTypesQuery(typeName), restClient, objectMapper)
             val argsData = executeGraphQl(endpoint, GraphQlIntrospection.shallowArgsQuery(typeName), restClient, objectMapper)
 
@@ -278,7 +288,6 @@ class GraphQlLearner(
             val argsFields = ((argsData["__type"] as? Map<String, Any?>)
                 ?.get("fields") as? List<Map<String, Any?>>) ?: emptyList()
 
-            // Index args by field name
             val argsByField = argsFields.associate { field ->
                 val name = field["name"] as? String ?: ""
                 @Suppress("UNCHECKED_CAST")
@@ -297,10 +306,6 @@ class GraphQlLearner(
             }
         }
 
-        /**
-         * Parse an argument from a shallow query where type has only kind+name (no ofType).
-         * NON_NULL wrappers without ofType are inferred as STRING.
-         */
         private fun parseShallowArgument(raw: Map<String, Any?>): GraphQlArgument? {
             val name = raw["name"] as? String ?: return null
             val description = raw["description"] as? String
@@ -308,7 +313,6 @@ class GraphQlLearner(
             val rawType = raw["type"] as? Map<String, Any?>
             val type = parseTypeRef(rawType) ?: return null
 
-            // If NON_NULL but missing ofType (depth-limited), infer the inner type
             val resolvedType = if (type.kind == "NON_NULL" && type.ofType == null) {
                 val inferredInner = inferArgType(name)
                 GraphQlTypeRef(kind = "NON_NULL", name = null, ofType = inferredInner)
@@ -319,9 +323,6 @@ class GraphQlLearner(
             return GraphQlArgument(name = name, description = description, type = resolvedType)
         }
 
-        /**
-         * Infer a GraphQL type for an argument when introspection depth was insufficient.
-         */
         private fun inferArgType(argName: String): GraphQlTypeRef {
             return when {
                 argName == "id" || argName.endsWith("Id") -> GraphQlTypeRef(kind = "SCALAR", name = "ID")
