@@ -26,10 +26,10 @@ import kotlin.time.measureTime
 /**
  * Docker-backed [SandboxSession] that maintains a long-lived container.
  *
- * The container is created with `docker create` and started with `docker start`.
+ * The container is created and started atomically with `docker run -d`.
  * Commands are executed via `docker exec`. State (files, packages, env) persists
- * across executions. The container can be paused (`docker stop`) and resumed
- * (`docker start`) without losing filesystem state.
+ * across executions. The container can be paused (`docker pause`) and resumed
+ * (`docker unpause`) without losing any state including tmpfs mounts.
  *
  * @param label human-readable session label
  * @param config sandbox configuration
@@ -68,9 +68,16 @@ class DockerSandboxSession(
         startContainer()
     }
 
+    /**
+     * Creates and starts the container atomically using `docker run -d`.
+     *
+     * Uses `docker run -d` instead of separate `docker create` + `docker start`
+     * to avoid race conditions in CI environments where the container could
+     * disappear between the two commands.
+     */
     private fun startContainer() {
         val cmd = mutableListOf(
-            "docker", "create",
+            "docker", "run", "-d",
             "--name", containerName,
         )
 
@@ -96,23 +103,10 @@ class DockerSandboxSession(
 
         if (exitCode != 0) {
             state = SandboxSession.SessionState.CLOSED
-            throw RuntimeException("Failed to create sandbox container: $output")
+            throw RuntimeException("Failed to start sandbox container: $output")
         }
 
         containerId = output.take(12)
-
-        // Start the container
-        val startProcess = ProcessBuilder("docker", "start", containerId!!)
-            .redirectErrorStream(true)
-            .start()
-        val startOutput = startProcess.inputStream.bufferedReader().readText().trim()
-        val startExit = startProcess.waitFor()
-
-        if (startExit != 0) {
-            state = SandboxSession.SessionState.CLOSED
-            throw RuntimeException("Failed to start sandbox container: $startOutput")
-        }
-
         logger.info("Sandbox session '{}' ({}) started: container={}", label, id, containerId)
     }
 
@@ -237,26 +231,49 @@ class DockerSandboxSession(
         }
     }
 
+    /**
+     * Pauses the container using `docker pause`.
+     *
+     * Uses `docker pause` (not `docker stop`) to freeze processes:
+     *
+     * ```
+     * ┌──────────────────────┬──────────────────┬───────────┬────────────┬──────────────┐
+     * │       Command        │    Processes     │  Memory   │ Filesystem │ /tmp (tmpfs) │
+     * ├──────────────────────┼──────────────────┼───────────┼────────────┼──────────────┤
+     * │ docker stop/start    │ Killed/Restarted │ Lost      │ Preserved  │ Cleared      │
+     * ├──────────────────────┼──────────────────┼───────────┼────────────┼──────────────┤
+     * │ docker pause/unpause │ Frozen/Unfrozen  │ Preserved │ Preserved  │ Preserved    │
+     * └──────────────────────┴──────────────────┴───────────┴────────────┴──────────────┘
+     * ```
+     */
     override fun pause() {
         if (state != SandboxSession.SessionState.ACTIVE) return
         val cid = containerId ?: return
 
-        val process = ProcessBuilder("docker", "stop", cid)
+        val process = ProcessBuilder("docker", "pause", cid)
             .redirectErrorStream(true)
             .start()
-        process.waitFor(10, TimeUnit.SECONDS)
+        val output = process.inputStream.bufferedReader().readText().trim()
+        if (process.waitFor() != 0) {
+            throw RuntimeException("Failed to pause container: $output")
+        }
 
         state = SandboxSession.SessionState.PAUSED
         logger.info("Session '{}' ({}) paused", label, id)
     }
 
+    /**
+     * Resumes the container using `docker unpause`.
+     *
+     * @see pause for why `unpause` is used instead of `start`
+     */
     override fun resume() {
         check(state == SandboxSession.SessionState.PAUSED) {
             "Cannot resume session '$id' with state $state"
         }
         val cid = containerId ?: throw IllegalStateException("No container ID")
 
-        val process = ProcessBuilder("docker", "start", cid)
+        val process = ProcessBuilder("docker", "unpause", cid)
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.bufferedReader().readText().trim()
