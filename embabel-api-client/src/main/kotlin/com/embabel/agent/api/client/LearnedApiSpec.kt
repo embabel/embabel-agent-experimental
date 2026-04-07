@@ -19,6 +19,7 @@ import com.embabel.agent.api.client.graphql.GraphQlLearner
 import com.embabel.agent.api.client.openapi.OpenApiLearner
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.fasterxml.jackson.annotation.JsonTypeInfo
+import java.time.Instant
 
 /**
  * Serializable specification that captures everything needed to reconstruct
@@ -34,6 +35,9 @@ sealed interface LearnedApiSpec {
     /** The source URL or endpoint this spec was learned from. */
     val source: String
 
+    /** When this spec was learned/cached. Used to decide when to refresh. */
+    val learnedAt: Instant
+
     /**
      * Create a factory function that produces a [ProgressiveTool] given credentials.
      */
@@ -45,6 +49,7 @@ sealed interface LearnedApiSpec {
     data class OpenApi(
         override val source: String,
         val rawSpec: String,
+        override val learnedAt: Instant = Instant.now(),
     ) : LearnedApiSpec {
 
         override fun toFactory(): (ApiCredentials) -> ProgressiveTool = { credentials ->
@@ -63,6 +68,7 @@ sealed interface LearnedApiSpec {
         val apiName: String,
         val queryTypeName: String?,
         val mutationTypeName: String?,
+        override val learnedAt: Instant = Instant.now(),
     ) : LearnedApiSpec {
 
         override fun toFactory(): (ApiCredentials) -> ProgressiveTool = { credentials ->
