@@ -81,6 +81,13 @@ class ApiExplorer(
      * @return a [DiscoveredApi] describing what was found
      */
     fun discover(url: String): DiscoveredApi {
+        // Short-circuit: if URL looks like a spec file, skip the LLM probe entirely
+        val quickResult = detectSpecFromUrl(url)
+        if (quickResult != null) {
+            logger.info("Fast-detected {} spec from URL pattern: {}", quickResult.type, url)
+            return quickResult
+        }
+
         val prompt = buildPrompt(url)
 
         val result = ai.withDefaultLlm()
@@ -103,6 +110,30 @@ class ApiExplorer(
                 "Cannot learn unknown API type at ${discovered.specUrl}: ${discovered.description}"
             )
         }
+    }
+
+    /**
+     * Fast-detect if a URL is already a spec file based on URL patterns.
+     * Avoids an entire LLM probe loop for obvious cases.
+     */
+    private fun detectSpecFromUrl(url: String): DiscoveredApi? {
+        val lower = url.lowercase()
+        val isOpenApi = lower.endsWith(".json") && (lower.contains("openapi") || lower.contains("swagger"))
+            || lower.endsWith(".yaml") && (lower.contains("openapi") || lower.contains("swagger") || lower.contains("apis-guru"))
+            || lower.endsWith(".yml") && (lower.contains("openapi") || lower.contains("swagger") || lower.contains("apis-guru"))
+            || lower.contains("swagger.json") || lower.contains("swagger.yaml")
+            || lower.contains("openapi.json") || lower.contains("openapi.yaml") || lower.contains("openapi.yml")
+            || lower.contains("api-docs")
+        if (isOpenApi) {
+            return DiscoveredApi(ApiType.OPENAPI, url, "OpenAPI spec at $url")
+        }
+
+        val isGraphQl = lower.endsWith("/graphql") || lower.endsWith("/gql")
+        if (isGraphQl) {
+            return DiscoveredApi(ApiType.GRAPHQL, url, "GraphQL endpoint at $url")
+        }
+
+        return null
     }
 
     companion object {
