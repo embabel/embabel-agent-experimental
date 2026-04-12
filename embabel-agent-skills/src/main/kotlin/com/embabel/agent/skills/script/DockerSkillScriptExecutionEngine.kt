@@ -15,16 +15,16 @@
  */
 package com.embabel.agent.skills.script
 
-import com.embabel.agent.sandbox.DockerExecutor
-import com.embabel.agent.sandbox.ExecutionRequest
-import com.embabel.agent.sandbox.ExecutionResult
 import com.embabel.agent.tools.file.FileTools
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
+import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.measureTime
 
 /**
  * Script execution engine that runs scripts inside a Docker container for sandboxed execution.
@@ -34,10 +34,8 @@ import kotlin.time.Duration.Companion.seconds
  * - Write output artifacts via OUTPUT_DIR
  * - Access network (can be disabled)
  *
- * This implementation delegates to [DockerExecutor] from the sandbox module for the
- * actual container execution, while adding skill-specific logic like:
- * - Script language validation and interpreter selection
- * - Input file path resolution via [FileTools]
+ * Self-contained implementation — no dependency on the embabel-agent-sandbox module.
+ * All Docker CLI interaction is handled directly via [ProcessBuilder].
  *
  * @param image the Docker image to use for execution
  * @param timeout maximum execution time before killing the container
@@ -67,16 +65,6 @@ class DockerSkillScriptExecutionEngine @JvmOverloads constructor(
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    private val dockerExecutor = DockerExecutor(
-        image = image,
-        networkEnabled = networkEnabled,
-        memoryLimit = memoryLimit,
-        cpuLimit = cpuLimit,
-        baseEnvironment = environment,
-        user = user,
-        workDir = workDir,
-    )
-
     override fun supportedLanguages(): Set<ScriptLanguage> = supportedLanguages
 
     override fun validate(script: SkillScript): ScriptExecutionResult.Denied? {
@@ -92,8 +80,7 @@ class DockerSkillScriptExecutionEngine @JvmOverloads constructor(
             )
         }
 
-        // Check if Docker is available via the executor
-        dockerExecutor.checkAvailability()?.let { reason ->
+        checkDockerAvailability()?.let { reason ->
             return ScriptExecutionResult.Denied(reason)
         }
 
@@ -106,136 +93,198 @@ class DockerSkillScriptExecutionEngine @JvmOverloads constructor(
         stdin: String?,
         inputFiles: List<Path>,
     ): ScriptExecutionResult {
-        // Validate first
         validate(script)?.let { return it }
 
-        // Validate and resolve input files using FileTools for secure path resolution
+        // Resolve and validate input file paths securely via FileTools
         val resolvedInputFiles = mutableListOf<Path>()
         for (inputFile in inputFiles) {
-            val pathStr = inputFile.toString()
             try {
-                val resolved = fileTools.resolveAndValidateFile(pathStr)
-                resolvedInputFiles.add(resolved)
+                resolvedInputFiles.add(fileTools.resolveAndValidateFile(inputFile.toString()))
             } catch (e: SecurityException) {
-                return ScriptExecutionResult.Denied(
-                    "Path traversal not allowed: $inputFile"
-                )
+                return ScriptExecutionResult.Denied("Path traversal not allowed: $inputFile")
             } catch (e: IllegalArgumentException) {
-                return ScriptExecutionResult.Denied(
-                    "Input file error: ${e.message}"
-                )
+                return ScriptExecutionResult.Denied("Input file error: ${e.message}")
             }
         }
 
-        // Create a temporary directory for the script
-        val scriptDir = Files.createTempDirectory("script-exec-")
+        // Temp directories: script mount, input files, output artifacts
+        val tempBase = Files.createTempDirectory("skills-docker-")
+        val scriptDir = tempBase.resolve("script").also { Files.createDirectories(it) }
+        val inputDir = tempBase.resolve("input").also { Files.createDirectories(it) }
+        val outputDir = tempBase.resolve("output").also { Files.createDirectories(it) }
+
         try {
-            // Copy script to temp directory
-            val scriptFileName = script.fileName
-            val containerScriptPath = scriptDir.resolve(scriptFileName)
-            Files.copy(script.scriptPath, containerScriptPath)
+            // Stage the script file into its own mount directory
+            Files.copy(script.scriptPath, scriptDir.resolve(script.fileName))
 
-            // Build the command with interpreter
-            val interpreter = getInterpreter(script.language)
-            val command = interpreter + listOf("/script/$scriptFileName") + args
+            // Stage input files
+            for (inputFile in resolvedInputFiles) {
+                Files.copy(inputFile, inputDir.resolve(inputFile.fileName))
+            }
 
-            // Create mount for script directory
-            val scriptMount = DockerExecutor.Mount(
-                hostPath = scriptDir,
-                containerPath = "/script",
-                readOnly = true,
-            )
+            val interpreter = interpreterFor(script.language)
+            val command = interpreter + listOf("/script/${script.fileName}") + args
+            val dockerCommand = buildDockerCommand(command, scriptDir, inputDir, outputDir)
 
-            // Execute via DockerExecutor with script mount
-            val dockerExecutorWithMount = DockerExecutor(
-                image = image,
-                networkEnabled = networkEnabled,
-                memoryLimit = memoryLimit,
-                cpuLimit = cpuLimit,
-                baseEnvironment = environment,
-                user = user,
-                workDir = workDir,
-                mounts = listOf(scriptMount),
-            )
+            logger.debug("Executing docker command: {}", dockerCommand.joinToString(" "))
 
-            val request = ExecutionRequest(
-                command = command,
-                stdin = stdin,
-                inputFiles = resolvedInputFiles,
-                timeout = timeout,
-            )
-
-            val result = dockerExecutorWithMount.execute(request)
-
-            return convertResult(result, script.fileName)
+            return runDockerProcess(dockerCommand, stdin, outputDir, script.fileName)
         } finally {
-            // Cleanup script directory
             try {
-                scriptDir.toFile().deleteRecursively()
+                tempBase.toFile().deleteRecursively()
             } catch (e: Exception) {
-                logger.warn("Failed to cleanup script directory: {}", scriptDir, e)
+                logger.warn("Failed to cleanup temp directory: {}", tempBase, e)
             }
         }
     }
 
-    private fun getInterpreter(language: ScriptLanguage): List<String> {
-        return when (language) {
-            ScriptLanguage.PYTHON -> listOf("python3")
-            ScriptLanguage.BASH -> listOf("bash")
-            ScriptLanguage.JAVASCRIPT -> listOf("node")
-            ScriptLanguage.KOTLIN_SCRIPT -> listOf("kotlin")
+    // --- Docker command construction ---
+
+    private fun buildDockerCommand(
+        command: List<String>,
+        scriptDir: Path,
+        inputDir: Path,
+        outputDir: Path,
+    ): List<String> {
+        return buildList {
+            add("docker"); add("run"); add("--rm")
+
+            memoryLimit?.let { addAll(listOf("--memory", it)) }
+            cpuLimit?.let { addAll(listOf("--cpus", it)) }
+
+            if (!networkEnabled) addAll(listOf("--network", "none"))
+
+            user?.let { addAll(listOf("--user", it)) }
+            addAll(listOf("--workdir", workDir))
+
+            // Script, input, and output mounts
+            addAll(listOf("-v", "${scriptDir.absolutePathString()}:/script:ro"))
+            addAll(listOf("-v", "${inputDir.absolutePathString()}:/input:ro"))
+            addAll(listOf("-v", "${outputDir.absolutePathString()}:/output:rw"))
+
+            // Environment
+            addAll(listOf("-e", "INPUT_DIR=/input"))
+            addAll(listOf("-e", "OUTPUT_DIR=/output"))
+            for ((key, value) in environment) addAll(listOf("-e", "$key=$value"))
+
+            add(image)
+            addAll(command)
         }
     }
 
-    private fun convertResult(result: ExecutionResult, scriptName: String): ScriptExecutionResult {
-        return when (result) {
-            is ExecutionResult.Completed -> {
-                val artifacts = result.artifacts.map { artifact ->
-                    ScriptArtifact(
-                        name = artifact.name,
-                        path = artifact.path,
-                        mimeType = artifact.mimeType,
-                        sizeBytes = artifact.sizeBytes,
-                    )
-                }
-                ScriptExecutionResult.Success(
-                    stdout = result.stdout,
-                    stderr = result.stderr,
-                    exitCode = result.exitCode,
-                    duration = result.duration,
-                    artifacts = artifacts,
-                )
-            }
+    // --- Process execution ---
 
-            is ExecutionResult.TimedOut -> {
-                logger.warn("Script {} timed out after {}", scriptName, timeout)
-                ScriptExecutionResult.Failure(
-                    error = "Script execution timed out after $timeout",
-                    stderr = result.partialStderr,
-                    timedOut = true,
-                    duration = result.duration,
-                )
-            }
+    private fun runDockerProcess(
+        dockerCommand: List<String>,
+        stdin: String?,
+        outputDir: Path,
+        scriptFileName: String,
+    ): ScriptExecutionResult {
+        val process = ProcessBuilder(dockerCommand)
+            .redirectErrorStream(false)
+            .start()
 
-            is ExecutionResult.Failed -> {
-                logger.error("Script {} failed: {}", scriptName, result.error)
-                ScriptExecutionResult.Failure(
-                    error = result.error,
-                    timedOut = false,
-                )
-            }
-
-            is ExecutionResult.Denied -> {
-                ScriptExecutionResult.Denied(result.reason)
-            }
+        if (stdin != null) {
+            process.outputStream.bufferedWriter().use { it.write(stdin) }
+        } else {
+            process.outputStream.close()
         }
+
+        var stdout = ""
+        var stderr = ""
+        val stdoutThread = Thread { stdout = process.inputStream.bufferedReader().readText() }
+            .apply { isDaemon = true; start() }
+        val stderrThread = Thread { stderr = process.errorStream.bufferedReader().readText() }
+            .apply { isDaemon = true; start() }
+
+        val completed: Boolean
+        val duration = measureTime {
+            completed = process.waitFor(timeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+        }
+
+        if (!completed) {
+            process.destroyForcibly()
+            stdoutThread.join(1_000)
+            stderrThread.join(1_000)
+            logger.warn("Script {} timed out after {}", scriptFileName, timeout)
+            return ScriptExecutionResult.Failure(
+                error = "Script execution timed out after $timeout",
+                stderr = stderr.takeIf { it.isNotBlank() },
+                timedOut = true,
+                duration = duration,
+            )
+        }
+
+        stdoutThread.join()
+        stderrThread.join()
+
+        val exitCode = process.exitValue()
+        val artifacts = collectArtifacts(outputDir)
+
+        logger.debug(
+            "Script {} completed: exit={}, duration={}, artifacts={}",
+            scriptFileName, exitCode, duration, artifacts.size,
+        )
+
+        return ScriptExecutionResult.Success(
+            stdout = stdout,
+            stderr = stderr,
+            exitCode = exitCode,
+            duration = duration,
+            artifacts = artifacts,
+        )
+    }
+
+    // --- Artifact collection ---
+
+    private fun collectArtifacts(outputDir: Path): List<ScriptArtifact> {
+        if (!Files.isDirectory(outputDir)) return emptyList()
+        // Copy artifacts out of outputDir before the temp tree is deleted
+        val artifactsStaging = Files.createTempDirectory("skills-artifacts-")
+        return Files.list(outputDir)
+            .filter { Files.isRegularFile(it) }
+            .map { file ->
+                val dest = artifactsStaging.resolve(file.fileName)
+                Files.copy(file, dest)
+                ScriptArtifact(
+                    name = file.fileName.toString(),
+                    path = dest.toAbsolutePath(),
+                    mimeType = ScriptArtifact.inferMimeType(file.fileName.toString()),
+                    sizeBytes = Files.size(dest),
+                )
+            }
+            .toList()
+            .sortedBy { it.name }
+    }
+
+    // --- Interpreter selection ---
+
+    private fun interpreterFor(language: ScriptLanguage): List<String> = when (language) {
+        ScriptLanguage.PYTHON -> listOf("python3")
+        ScriptLanguage.BASH -> listOf("bash")
+        ScriptLanguage.JAVASCRIPT -> listOf("node")
+        ScriptLanguage.KOTLIN_SCRIPT -> listOf("kotlin")
+    }
+
+    // --- Docker availability (instance-level, returns denial reason or null) ---
+
+    private fun checkDockerAvailability(): String? = try {
+        val process = ProcessBuilder("docker", "version")
+            .redirectErrorStream(true)
+            .start()
+        val completed = process.waitFor(5, TimeUnit.SECONDS)
+        when {
+            !completed -> { process.destroyForcibly(); "Docker availability check timed out" }
+            process.exitValue() != 0 -> "Docker returned an error; is the Docker daemon running?"
+            else -> null
+        }
+    } catch (e: Exception) {
+        "Docker is not available: ${e.message}"
     }
 
     companion object {
         /**
          * Default Docker image for script execution.
-         * This should be an image with Python, Node.js, and common tools installed.
-         *
          * Build from the Dockerfile in embabel-agent-skills/docker:
          * ```
          * docker build -t embabel/agent-sandbox:latest ./embabel-agent-skills/docker
@@ -245,27 +294,36 @@ class DockerSkillScriptExecutionEngine @JvmOverloads constructor(
 
         private val logger = LoggerFactory.getLogger(DockerSkillScriptExecutionEngine::class.java)
 
-        /**
-         * Check if Docker is available on this system.
-         */
-        fun isDockerAvailable(): Boolean = DockerExecutor.isDockerAvailable()
+        /** Check if Docker is available on this system. */
+        fun isDockerAvailable(): Boolean = try {
+            val process = ProcessBuilder("docker", "version")
+                .redirectErrorStream(true)
+                .start()
+            process.waitFor(5, TimeUnit.SECONDS) && process.exitValue() == 0
+        } catch (e: Exception) {
+            false
+        }
+
+        /** Check if a Docker image exists locally. */
+        fun imageExists(image: String): Boolean = try {
+            val process = ProcessBuilder("docker", "image", "inspect", image)
+                .redirectErrorStream(true)
+                .start()
+            process.waitFor(5, TimeUnit.SECONDS) && process.exitValue() == 0
+        } catch (e: Exception) {
+            false
+        }
 
         /**
-         * Check if a Docker image exists locally.
-         */
-        fun imageExists(image: String): Boolean = DockerExecutor.imageExists(image)
-
-        /**
-         * Ensure the default sandbox image exists, logging instructions if not.
+         * Ensure the default sandbox image exists, logging build instructions if not.
          *
-         * @return true if the image exists, false if it needs to be built
+         * @return true if the image is ready to use
          */
         fun ensureDefaultImageExists(): Boolean {
             if (!isDockerAvailable()) {
-                logger.error("Docker is not available. Please install Docker to use DockerExecutionEngine.")
+                logger.error("Docker is not available. Please install Docker to use DockerSkillScriptExecutionEngine.")
                 return false
             }
-
             if (!imageExists(DEFAULT_IMAGE)) {
                 logger.warn(
                     """
@@ -274,19 +332,16 @@ class DockerSkillScriptExecutionEngine @JvmOverloads constructor(
                     |Build it from the embabel-agent-skills module:
                     |  docker build -t $DEFAULT_IMAGE ./embabel-agent-skills/docker
                     |
-                    |Or use a different image:
-                    |  DockerExecutionEngine(image = "your-image:tag")
+                    |Or specify a different image:
+                    |  DockerSkillScriptExecutionEngine(image = "your-image:tag")
                     """.trimMargin()
                 )
                 return false
             }
-
             return true
         }
 
-        /**
-         * Create a DockerExecutionEngine with Python-only support.
-         */
+        /** Create an engine with Python-only support. */
         fun pythonOnly(
             image: String = DEFAULT_IMAGE,
             timeout: Duration = 60.seconds,
@@ -296,9 +351,7 @@ class DockerSkillScriptExecutionEngine @JvmOverloads constructor(
             supportedLanguages = setOf(ScriptLanguage.PYTHON),
         )
 
-        /**
-         * Create a DockerExecutionEngine with maximum isolation.
-         */
+        /** Create an engine with maximum isolation (no network, reduced resources). */
         fun isolated(
             image: String = DEFAULT_IMAGE,
             timeout: Duration = 30.seconds,
