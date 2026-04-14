@@ -163,9 +163,13 @@ class DockerSkillScriptExecutionEngine @JvmOverloads constructor(
             addAll(listOf("-v", "${outputDir.absolutePathString()}:/output:rw"))
 
             // Environment
+            for ((key, value) in environment) {
+                if (key != "INPUT_DIR" && key != "OUTPUT_DIR") {
+                    addAll(listOf("-e", "$key=$value"))
+                }
+            }
             addAll(listOf("-e", "INPUT_DIR=/input"))
             addAll(listOf("-e", "OUTPUT_DIR=/output"))
-            for ((key, value) in environment) addAll(listOf("-e", "$key=$value"))
 
             add(image)
             addAll(command)
