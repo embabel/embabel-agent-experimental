@@ -241,20 +241,22 @@ class DockerSkillScriptExecutionEngine @JvmOverloads constructor(
         if (!Files.isDirectory(outputDir)) return emptyList()
         // Copy artifacts out of outputDir before the temp tree is deleted
         val artifactsStaging = Files.createTempDirectory("skills-artifacts-")
-        return Files.list(outputDir)
-            .filter { Files.isRegularFile(it) }
-            .map { file ->
-                val dest = artifactsStaging.resolve(file.fileName)
-                Files.copy(file, dest)
-                ScriptArtifact(
-                    name = file.fileName.toString(),
-                    path = dest.toAbsolutePath(),
-                    mimeType = ScriptArtifact.inferMimeType(file.fileName.toString()),
-                    sizeBytes = Files.size(dest),
-                )
-            }
-            .toList()
-            .sortedBy { it.name }
+        return Files.list(outputDir).use { files ->
+            files
+                .filter { Files.isRegularFile(it) }
+                .map { file ->
+                    val dest = artifactsStaging.resolve(file.fileName)
+                    Files.copy(file, dest)
+                    ScriptArtifact(
+                        name = file.fileName.toString(),
+                        path = dest.toAbsolutePath(),
+                        mimeType = ScriptArtifact.inferMimeType(file.fileName.toString()),
+                        sizeBytes = Files.size(dest),
+                    )
+                }
+                .toList()
+                .sortedBy { it.name }
+        }
     }
 
     // --- Interpreter selection ---
