@@ -27,7 +27,6 @@
         <module>embabel-agent-discord</module>
         <module>embabel-agent-eval</module>
         <module>embabel-agent-remote</module>
-        <module>embabel-agent-skills</module>
         <module>embabel-agent-spec</module>
         <module>embabel-api-client</module>
         <module>embabel-experimental-integration-tests</module>
