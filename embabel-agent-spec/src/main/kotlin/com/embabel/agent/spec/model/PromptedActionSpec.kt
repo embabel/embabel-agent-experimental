@@ -29,6 +29,9 @@ import com.fasterxml.jackson.annotation.JsonPropertyDescription
  * @param outputTypeName output type
  * @param nullable whether the output can be null,
  * which will drive replanning
+ * @param export when true, a goal is auto-generated for this action so it can
+ * be invoked directly as a tool by the chat LLM. Analogous to the
+ * `@AchievesGoal` annotation in the framework's annotation programming model.
  */
 data class PromptedActionSpec(
     override val name: String,
@@ -46,6 +49,7 @@ data class PromptedActionSpec(
     val tools: List<String> = emptyList(),
     val references: List<String> = emptyList(),
     val nullable: Boolean = false,
+    val export: Boolean = false,
     @param:JsonPropertyDescription("Type of step, must be 'action'")
     override val stepType: String = "action",
 ) : ActionSpec {
