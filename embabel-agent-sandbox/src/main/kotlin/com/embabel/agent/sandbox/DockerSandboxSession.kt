@@ -92,6 +92,12 @@ class DockerSandboxSession(
         for ((containerKey, hostKey) in config.mapEnv) {
             System.getenv(hostKey)?.let { cmd.addAll(listOf("-e", "$containerKey=$it")) }
         }
+        for ((key, value) in config.runtimeEnv) {
+            cmd.addAll(listOf("-e", "$key=$value"))
+        }
+        for ((host, ip) in config.extraHosts) {
+            cmd.addAll(listOf("--add-host", "$host:$ip"))
+        }
 
         cmd.addAll(listOf(config.image, "sleep", "infinity"))
 

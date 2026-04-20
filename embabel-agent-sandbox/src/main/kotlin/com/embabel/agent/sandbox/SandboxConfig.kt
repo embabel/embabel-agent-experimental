@@ -65,6 +65,28 @@ data class SandboxConfig(
      * `GH_TOKEN` inside the container.
      */
     val mapEnv: Map<String, String> = emptyMap(),
+    /**
+     * Per-session runtime environment values, injected as `docker run -e K=V`
+     * at container start. Unlike [propagateEnv] and [mapEnv] these are NOT
+     * read from the host process environment — the caller supplies the
+     * literal values at session create time. Use this for short-lived secrets
+     * (session API keys, one-shot tokens) that must not live on the host.
+     */
+    val runtimeEnv: Map<String, String> = emptyMap(),
+    /**
+     * Extra host→IP entries added to the container's `/etc/hosts` via
+     * `docker run --add-host host:ip`. Use `host-gateway` as the IP to reach
+     * the Docker host from inside the container on Linux engines — on Docker
+     * Desktop `host.docker.internal` resolves automatically but adding it
+     * explicitly is harmless and keeps the behaviour portable.
+     *
+     * Example:
+     * ```yaml
+     * extraHosts:
+     *   host.docker.internal: host-gateway
+     * ```
+     */
+    val extraHosts: Map<String, String> = emptyMap(),
 ) {
 
     /**
