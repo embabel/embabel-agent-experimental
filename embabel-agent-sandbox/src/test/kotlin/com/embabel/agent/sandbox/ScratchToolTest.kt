@@ -24,10 +24,12 @@ import org.junit.jupiter.api.AfterEach
 class ScratchToolTest {
 
     private var scratch: ScratchTool? = null
+    private var sessionManager: DockerSandboxSessionManager? = null
 
     @AfterEach
     fun cleanup() {
         scratch?.close()
+        sessionManager?.closeAll()
     }
 
     private fun resultText(result: Tool.Result): String {
@@ -43,12 +45,16 @@ class ScratchToolTest {
         )
     }
 
+    private fun newScratch(): ScratchTool {
+        val mgr = DockerSandboxSessionManager().also { sessionManager = it }
+        return ScratchTool(sessionManager = mgr).also { scratch = it }
+    }
+
     @Test
     fun `basic command execution`() {
         assumeSandboxAvailable()
 
-        scratch = ScratchTool.default()
-        val text = resultText(scratch!!.call("""{"command": "echo hello world"}"""))
+        val text = resultText(newScratch().call("""{"command": "echo hello world"}"""))
         assertTrue(text.contains("hello world"), "Should contain output: $text")
     }
 
@@ -56,9 +62,9 @@ class ScratchToolTest {
     fun `state persists between calls`() {
         assumeSandboxAvailable()
 
-        scratch = ScratchTool.default()
-        scratch!!.call("""{"command": "echo 'test content' > /tmp/myfile.txt"}""")
-        val text = resultText(scratch!!.call("""{"command": "cat /tmp/myfile.txt"}"""))
+        val s = newScratch()
+        s.call("""{"command": "echo 'test content' > /tmp/myfile.txt"}""")
+        val text = resultText(s.call("""{"command": "cat /tmp/myfile.txt"}"""))
         assertTrue(text.contains("test content"), "File content should persist: $text")
     }
 
@@ -66,8 +72,7 @@ class ScratchToolTest {
     fun `reports non-zero exit code`() {
         assumeSandboxAvailable()
 
-        scratch = ScratchTool.default()
-        val text = resultText(scratch!!.call("""{"command": "exit 42"}"""))
+        val text = resultText(newScratch().call("""{"command": "exit 42"}"""))
         assertTrue(text.contains("Exit code 42"), "Should report exit code: $text")
     }
 
@@ -75,8 +80,7 @@ class ScratchToolTest {
     fun `python execution`() {
         assumeSandboxAvailable()
 
-        scratch = ScratchTool.default()
-        val text = resultText(scratch!!.call("""{"command": "python3 -c 'print(2 + 2)'"}"""))
+        val text = resultText(newScratch().call("""{"command": "python3 -c 'print(2 + 2)'"}"""))
         assertTrue(text.contains("4"), "Should contain result: $text")
     }
 
@@ -84,8 +88,7 @@ class ScratchToolTest {
     fun `node execution`() {
         assumeSandboxAvailable()
 
-        scratch = ScratchTool.default()
-        val text = resultText(scratch!!.call("""{"command": "node -e 'console.log(3 * 7)'"}"""))
+        val text = resultText(newScratch().call("""{"command": "node -e 'console.log(3 * 7)'"}"""))
         assertTrue(text.contains("21"), "Should contain result: $text")
     }
 
@@ -93,8 +96,7 @@ class ScratchToolTest {
     fun `java version available`() {
         assumeSandboxAvailable()
 
-        scratch = ScratchTool.default()
-        val text = resultText(scratch!!.call("""{"command": "java -version 2>&1 | head -1"}"""))
+        val text = resultText(newScratch().call("""{"command": "java -version 2>&1 | head -1"}"""))
         assertTrue(text.contains("openjdk") || text.contains("java"), "Should show java version: $text")
     }
 
@@ -102,8 +104,7 @@ class ScratchToolTest {
     fun `sqlite works`() {
         assumeSandboxAvailable()
 
-        scratch = ScratchTool.default()
-        val text = resultText(scratch!!.call("""{"command": "sqlite3 :memory: 'SELECT 1+1;'"}"""))
+        val text = resultText(newScratch().call("""{"command": "sqlite3 :memory: 'SELECT 1+1;'"}"""))
         assertTrue(text.contains("2"), "Should contain sqlite result: $text")
     }
 
@@ -111,8 +112,7 @@ class ScratchToolTest {
     fun `graphviz generates svg`() {
         assumeSandboxAvailable()
 
-        scratch = ScratchTool.default()
-        val text = resultText(scratch!!.call("""{"command": "echo 'digraph { A -> B }' | dot -Tsvg | head -3"}"""))
+        val text = resultText(newScratch().call("""{"command": "echo 'digraph { A -> B }' | dot -Tsvg | head -3"}"""))
         assertTrue(text.contains("svg"), "Should contain SVG output: $text")
     }
 
@@ -120,8 +120,57 @@ class ScratchToolTest {
     fun `pip install and use package`() {
         assumeSandboxAvailable()
 
-        scratch = ScratchTool.default()
-        val text = resultText(scratch!!.call("""{"command": "python3 -c 'import pandas; print(pandas.__version__)'"}"""))
+        val text = resultText(newScratch().call("""{"command": "python3 -c 'import pandas; print(pandas.__version__)'"}"""))
         assertTrue(text.isNotBlank(), "Should show pandas version: $text")
+    }
+
+    @Test
+    fun `resumes a paused session on next call`() {
+        assumeSandboxAvailable()
+
+        val mgr = DockerSandboxSessionManager().also { sessionManager = it }
+        val tool = ScratchTool(sessionManager = mgr).also { scratch = it }
+        tool.call("""{"command": "echo 'persist me' > /tmp/a.txt"}""")
+
+        val active = mgr.list().single()
+        active.pause()
+        assertEquals(SandboxSession.SessionState.PAUSED, active.state)
+
+        val text = resultText(tool.call("""{"command": "cat /tmp/a.txt"}"""))
+        assertTrue(text.contains("persist me"), "Paused session should be resumed and state preserved: $text")
+        assertEquals(SandboxSession.SessionState.ACTIVE, active.state)
+    }
+
+    @Test
+    fun `recreates session if previous was evicted`() {
+        assumeSandboxAvailable()
+
+        val mgr = DockerSandboxSessionManager().also { sessionManager = it }
+        val tool = ScratchTool(sessionManager = mgr).also { scratch = it }
+        tool.call("""{"command": "echo first"}""")
+        val firstId = mgr.list().single().id
+
+        mgr.list().single().close()
+
+        val text = resultText(tool.call("""{"command": "echo second"}"""))
+        assertTrue(text.contains("second"), "Should run in new session: $text")
+        val newId = mgr.list().single { it.state != SandboxSession.SessionState.CLOSED }.id
+        assertNotEquals(firstId, newId, "A new session should have been created")
+    }
+
+    @Test
+    fun `close destroys session in manager`() {
+        assumeSandboxAvailable()
+
+        val mgr = DockerSandboxSessionManager().also { sessionManager = it }
+        val tool = ScratchTool(sessionManager = mgr).also { scratch = it }
+        tool.call("""{"command": "echo ready"}""")
+        assertEquals(1, mgr.list().size, "Session should be registered with manager")
+
+        tool.close()
+        assertTrue(
+            mgr.list().none { it.state == SandboxSession.SessionState.ACTIVE },
+            "No active sessions should remain after close",
+        )
     }
 }

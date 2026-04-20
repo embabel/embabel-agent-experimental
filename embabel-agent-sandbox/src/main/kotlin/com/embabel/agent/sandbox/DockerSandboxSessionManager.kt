@@ -32,7 +32,7 @@ import kotlin.time.toJavaDuration
  * @param maxTotalSessions maximum total concurrent sessions (0 = unlimited)
  * @param pauseGracePeriod how long a paused session survives before being closed
  */
-class DockerSandboxSessionManager(
+class DockerSandboxSessionManager @JvmOverloads constructor(
     private val maxSessionsPerOwner: Int = 5,
     private val maxTotalSessions: Int = 20,
     private val pauseGracePeriod: Duration = 1.hours,

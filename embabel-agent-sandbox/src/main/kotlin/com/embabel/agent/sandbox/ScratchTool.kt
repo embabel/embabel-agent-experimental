@@ -19,46 +19,48 @@ import com.embabel.agent.api.tool.Tool
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * A [Tool] that provides a persistent Docker sandbox for running arbitrary
- * commands. The sandbox container stays alive between calls, allowing
- * the LLM to build up state (install packages, create files, run scripts)
- * across multiple tool invocations.
+ * A [Tool] that exposes a persistent [SandboxSession] to an LLM as a bash-like
+ * REPL. The session stays alive between calls so the LLM can build up state
+ * (install packages, create files, run scripts) across multiple tool invocations.
  *
- * Unlike [DockerExecutor] which creates a fresh container per execution,
- * ScratchTool maintains a long-lived container that the LLM can interact
- * with like a terminal session.
+ * The tool owns its session: the session is created lazily on first [call] via
+ * [sessionManager] and destroyed when [close] is invoked. All container lifecycle
+ * (create, exec, pause/resume, destroy) is delegated to the [SandboxSession]
+ * abstraction — this class does not call `docker` directly.
  *
- * ## Example usage in an agent
+ * ## Example
  *
  * ```kotlin
- * val scratch = ScratchTool(image = "python:3.11-slim")
+ * val scratch = ScratchTool(
+ *     sessionManager = DockerSandboxSessionManager(),
+ *     config = SandboxConfig(enabled = true, image = ScratchTool.DEFAULT_IMAGE),
+ *     owner = "alice",
+ * )
  *
- * // Add to agent tools
  * promptRunner.withTool(scratch)
  *     .generateText("Install numpy and compute the eigenvalues of [[1,2],[3,4]]")
  *
- * // The LLM will call scratch_run multiple times:
- * // 1. pip install numpy
- * // 2. python3 -c "import numpy as np; print(np.linalg.eigvals([[1,2],[3,4]]))"
- *
- * // Clean up when done
- * scratch.close()
+ * scratch.close() // destroys the underlying session
  * ```
  *
- * @param image Docker image to use for the sandbox
- * @param name Tool name visible to the LLM
- * @param description Tool description visible to the LLM
- * @param networkEnabled Whether the sandbox can access the network
- * @param memoryLimit Memory limit (e.g., "512m", "2g")
- * @param cpuLimit CPU limit (e.g., "1.0")
- * @param timeout Default timeout per command
- * @param environment Environment variables available in the sandbox
+ * @param sessionManager manager that owns the underlying session
+ * @param config sandbox configuration (image, resources, env)
+ * @param owner optional owner identifier passed through to the session
+ * @param ttl idle TTL for the session
+ * @param name tool name visible to the LLM
+ * @param description tool description visible to the LLM
+ * @param shell shell used to interpret commands inside the container
+ * @param timeout per-command execution timeout
  */
 class ScratchTool(
-    private val image: String = DEFAULT_IMAGE,
+    private val sessionManager: SandboxSessionManager,
+    private val config: SandboxConfig = SandboxConfig(enabled = true, image = DEFAULT_IMAGE, memory = "1g", cpus = "2.0"),
+    private val owner: String? = null,
+    private val ttl: Duration = 1.hours,
     name: String = "scratch_run",
     description: String = """
         Run a bash command in a persistent Docker sandbox with Python 3, Node.js, Java,
@@ -70,18 +72,14 @@ class ScratchTool(
         Install missing packages if needed (pip install, apt-get, npm install).
     """.trimIndent(),
     private val shell: String = "bash",
-    private val networkEnabled: Boolean = true,
-    private val memoryLimit: String? = "1g",
-    private val cpuLimit: String? = "2.0",
     private val timeout: Duration = 60.seconds,
-    private val environment: Map<String, String> = emptyMap(),
 ) : Tool, AutoCloseable {
 
     private val logger = LoggerFactory.getLogger(ScratchTool::class.java)
     private val objectMapper = jacksonObjectMapper()
 
     @Volatile
-    private var containerId: String? = null
+    private var session: SandboxSession? = null
 
     override val definition = Tool.Definition(
         name = name,
@@ -108,102 +106,70 @@ class ScratchTool(
                 ?: return Tool.Result.error("'command' parameter is required")
             val stdin = params["stdin"] as? String
 
-            // Auto-detect raw Python/JS code and wrap it
             val command = wrapIfCode(rawCommand)
-
-            ensureContainer()
-            val cid = containerId ?: return Tool.Result.error("Failed to start sandbox container")
-
-            val result = executeInContainer(cid, command, stdin)
-            Tool.Result.text(result)
+            val active = ensureSession()
+            renderResult(active.execute(ExecutionRequest(
+                command = listOf(shell, "-c", command),
+                stdin = stdin,
+                timeout = timeout,
+            )))
         } catch (e: Exception) {
             logger.warn("Scratch command failed: {}", e.message)
             Tool.Result.error("Command failed: ${e.message}")
         }
     }
 
-    private fun ensureContainer() {
-        if (containerId != null) return
-        synchronized(this) {
-            if (containerId != null) return
-
-            logger.info("Starting scratch sandbox (image={})", image)
-
-            val cmd = mutableListOf(
-                "docker", "run", "-d",
-                "--name", "scratch-${System.currentTimeMillis()}",
-            )
-
-            memoryLimit?.let { cmd.addAll(listOf("--memory", it)) }
-            cpuLimit?.let { cmd.addAll(listOf("--cpus", it)) }
-            if (!networkEnabled) cmd.addAll(listOf("--network", "none"))
-
-            for ((key, value) in environment) {
-                cmd.addAll(listOf("-e", "$key=$value"))
+    private fun ensureSession(): SandboxSession = synchronized(this) {
+        val current = session
+        when (current?.state) {
+            SandboxSession.SessionState.ACTIVE -> current
+            SandboxSession.SessionState.PAUSED -> {
+                logger.info("Resuming paused scratch session {}", current.id)
+                current.resume()
+                current
             }
-
-            cmd.addAll(listOf(image, "sleep", "infinity"))
-
-            val process = ProcessBuilder(cmd)
-                .redirectErrorStream(true)
-                .start()
-            val output = process.inputStream.bufferedReader().readText().trim()
-            val exitCode = process.waitFor()
-
-            if (exitCode != 0) {
-                throw RuntimeException("Failed to start sandbox container: $output")
+            SandboxSession.SessionState.CLOSED, null -> {
+                if (current != null) {
+                    logger.info("Previous scratch session {} was closed — creating a new one", current.id)
+                }
+                sessionManager.create(
+                    label = definition.name,
+                    config = config,
+                    owner = owner,
+                    ttl = ttl,
+                ).also { session = it }
             }
-
-            containerId = output.take(12)
-            logger.info("Scratch sandbox started: {}", containerId)
         }
     }
 
-    private fun executeInContainer(cid: String, command: String, stdin: String?): String {
-        val execCmd = mutableListOf("docker", "exec")
-        if (stdin != null) execCmd.add("-i")
-        execCmd.addAll(listOf(cid, shell, "-c", command))
-
-        logger.debug("Scratch exec: {}", command.take(100))
-
-        val process = ProcessBuilder(execCmd)
-            .redirectErrorStream(true)
-            .start()
-
-        if (stdin != null) {
-            process.outputStream.bufferedWriter().use { it.write(stdin) }
-        } else {
-            process.outputStream.close()
+    private fun renderResult(result: ExecutionResult): Tool.Result = when (result) {
+        is ExecutionResult.Completed -> {
+            val combined = buildString {
+                append(result.stdout)
+                if (result.stderr.isNotEmpty()) {
+                    if (isNotEmpty() && !endsWith("\n")) append("\n")
+                    append(result.stderr)
+                }
+            }
+            if (result.success) {
+                Tool.Result.text(combined.ifBlank { "(no output)" })
+            } else {
+                Tool.Result.text("Exit code ${result.exitCode}:\n$combined")
+            }
         }
-
-        val completed = process.waitFor(timeout.inWholeMilliseconds, java.util.concurrent.TimeUnit.MILLISECONDS)
-        if (!completed) {
-            process.destroyForcibly()
-            return "Command timed out after ${timeout.inWholeSeconds}s"
-        }
-
-        val output = process.inputStream.bufferedReader().readText()
-        val exitCode = process.exitValue()
-
-        return if (exitCode == 0) {
-            output.ifBlank { "(no output)" }
-        } else {
-            "Exit code $exitCode:\n$output"
-        }
+        is ExecutionResult.TimedOut -> Tool.Result.text("Command timed out after ${timeout.inWholeSeconds}s")
+        is ExecutionResult.Failed -> Tool.Result.error("Command failed: ${result.error}")
+        is ExecutionResult.Denied -> Tool.Result.error("Command denied: ${result.reason}")
     }
 
     override fun close() {
-        val cid = containerId ?: return
+        val s = session ?: return
         try {
-            logger.info("Stopping scratch sandbox: {}", cid)
-            ProcessBuilder("docker", "rm", "-f", cid)
-                .redirectErrorStream(true)
-                .start()
-                .waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
-            containerId = null
+            s.close()
         } catch (e: Exception) {
-            logger.warn("Failed to stop sandbox {}: {}", cid, e.message)
+            logger.warn("Failed to close scratch session {}: {}", s.id, e.message)
         }
+        session = null
     }
 
     /**
@@ -213,7 +179,6 @@ class ScratchTool(
     private fun wrapIfCode(command: String): String {
         val trimmed = command.trim()
 
-        // Looks like Python (import, def, print, variable assignment with no bash syntax)
         val pythonIndicators = listOf("import ", "from ", "def ", "class ", "print(", "numpy", "pandas")
         if (pythonIndicators.any { trimmed.startsWith(it) || trimmed.contains("\n$it") }) {
             if (!trimmed.startsWith("python")) {
@@ -223,7 +188,6 @@ class ScratchTool(
             }
         }
 
-        // Looks like JavaScript (const, let, var, console.log, require)
         val jsIndicators = listOf("const ", "let ", "var ", "console.log", "require(")
         if (jsIndicators.any { trimmed.startsWith(it) || trimmed.contains("\n$it") }) {
             if (!trimmed.startsWith("node")) {
@@ -243,56 +207,5 @@ class ScratchTool(
          * Graphviz, ImageMagick, and common data science packages.
          */
         const val DEFAULT_IMAGE = "embabel/agent-sandbox:latest"
-
-        /**
-         * Create a scratch tool with the default batteries-included image.
-         */
-        fun default(
-            networkEnabled: Boolean = true,
-        ) = ScratchTool(
-            image = DEFAULT_IMAGE,
-            networkEnabled = networkEnabled,
-        )
-
-        /**
-         * Create a scratch tool with a minimal Python image.
-         */
-        fun python(
-            networkEnabled: Boolean = true,
-        ) = ScratchTool(
-            image = "python:3.11-slim",
-            name = "python_scratch",
-            description = "Run Python code or commands in an isolated sandbox with Python 3.11. " +
-                "State persists between calls.",
-            shell = "bash",
-            networkEnabled = networkEnabled,
-        )
-
-        /**
-         * Create a scratch tool with a minimal Node.js image.
-         */
-        fun node(
-            networkEnabled: Boolean = true,
-        ) = ScratchTool(
-            image = "node:20-slim",
-            name = "node_scratch",
-            description = "Run JavaScript/Node.js code or commands in an isolated sandbox with Node 20. " +
-                "State persists between calls.",
-            shell = "bash",
-            networkEnabled = networkEnabled,
-        )
-
-        /**
-         * Create a scratch tool with a custom image.
-         */
-        fun custom(
-            image: String,
-            shell: String = "sh",
-            networkEnabled: Boolean = true,
-        ) = ScratchTool(
-            image = image,
-            shell = shell,
-            networkEnabled = networkEnabled,
-        )
     }
 }
