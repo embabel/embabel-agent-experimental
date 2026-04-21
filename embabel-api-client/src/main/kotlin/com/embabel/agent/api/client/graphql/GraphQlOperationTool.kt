@@ -16,6 +16,7 @@
 package com.embabel.agent.api.client.graphql
 
 import com.embabel.agent.api.client.ToolNames
+import com.embabel.agent.api.client.openapi.OpenApiOperationTool
 import com.embabel.agent.api.tool.Tool
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -45,7 +46,11 @@ class GraphQlOperationTool(
         name = ToolNames.sanitize(field.name),
         description = buildDescription(),
         inputSchema = buildInputSchema(),
-    )
+    ).let { def ->
+        val outputSchema = graphQlTypeToJsonSchema(field.type)
+        if (outputSchema != null) def.withMetadata(OpenApiOperationTool.OUTPUT_SCHEMA_KEY, outputSchema)
+        else def
+    }
 
     override fun call(input: String): Tool.Result {
         return try {
@@ -151,6 +156,37 @@ class GraphQlOperationTool(
     companion object {
 
         private val logger = LoggerFactory.getLogger(GraphQlOperationTool::class.java)
+
+        /**
+         * Convert a [GraphQlTypeRef] to a JSON Schema string for the
+         * output schema metadata. Handles scalars, enums, lists, and
+         * objects (objects are typed as `"type": "object"` with the
+         * GraphQL type name as description).
+         */
+        internal fun graphQlTypeToJsonSchema(type: GraphQlTypeRef): String? = try {
+            val schema = typeRefToSchemaMap(type)
+            jacksonObjectMapper().writeValueAsString(schema)
+        } catch (_: Exception) {
+            null
+        }
+
+        private fun typeRefToSchemaMap(type: GraphQlTypeRef): Map<String, Any?> = when (type.kind) {
+            "NON_NULL" -> type.ofType?.let { typeRefToSchemaMap(it) } ?: mapOf("type" to "object")
+            "LIST" -> mapOf(
+                "type" to "array",
+                "items" to (type.ofType?.let { typeRefToSchemaMap(it) } ?: mapOf("type" to "object")),
+            )
+            "SCALAR" -> when (type.name) {
+                "Int" -> mapOf("type" to "integer")
+                "Float" -> mapOf("type" to "number")
+                "Boolean" -> mapOf("type" to "boolean")
+                "ID", "String" -> mapOf("type" to "string")
+                else -> mapOf("type" to "string", "description" to "GraphQL scalar: ${type.name}")
+            }
+            "ENUM" -> mapOf("type" to "string", "description" to "GraphQL enum: ${type.name}")
+            "OBJECT" -> mapOf("type" to "object", "description" to "GraphQL type: ${type.name}")
+            else -> mapOf("type" to "object")
+        }
 
         internal fun mapGraphQlType(type: GraphQlTypeRef): Tool.ParameterType {
             return when (type.leafKind()) {
