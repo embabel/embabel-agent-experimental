@@ -49,7 +49,10 @@ class OpenApiOperationTool(
         name = operationName(httpMethod, path, operation),
         description = operationDescription(operation),
         inputSchema = buildInputSchema(operation),
-    )
+    ).let { def ->
+        val outputSchema = extractOutputSchema(operation)
+        if (outputSchema != null) def.withMetadata(OUTPUT_SCHEMA_KEY, outputSchema) else def
+    }
 
     override fun call(input: String): Tool.Result {
         return try {
@@ -157,7 +160,57 @@ class OpenApiOperationTool(
 
     companion object {
 
+        /**
+         * Metadata key for the JSON Schema string describing the tool's
+         * response. Populated from the OpenAPI spec's `responses.2xx`
+         * content schema when available.
+         */
+        const val OUTPUT_SCHEMA_KEY: String = "outputSchema"
+
         private val logger = LoggerFactory.getLogger(OpenApiOperationTool::class.java)
+
+        /**
+         * Extract the JSON Schema of the success response (first 2xx with
+         * a JSON content schema) from an OpenAPI operation. Returns the
+         * schema as a JSON string, or `null` if unavailable.
+         */
+        private fun extractOutputSchema(operation: Operation): String? {
+            val responses = operation.responses ?: return null
+            // Try 200, 201, then any 2xx
+            val successResponse = responses["200"]
+                ?: responses["201"]
+                ?: responses.entries.firstOrNull { it.key.startsWith("2") }?.value
+                ?: return null
+            val mediaType = successResponse.content
+                ?.get("application/json")
+                ?: successResponse.content?.values?.firstOrNull()
+                ?: return null
+            val schema = mediaType.schema ?: return null
+            return try {
+                jacksonObjectMapper().writeValueAsString(schemaToMap(schema))
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        /**
+         * Convert a Swagger [Schema] to a Map suitable for JSON
+         * serialization. Handles object, array, and primitive types.
+         */
+        private fun schemaToMap(schema: Schema<*>): Map<String, Any?> = buildMap {
+            put("type", schema.type ?: "object")
+            schema.description?.let { put("description", it) }
+            if (schema.properties != null) {
+                put("properties", schema.properties.mapValues { (_, v) -> schemaToMap(v) })
+            }
+            if (schema.required != null) {
+                put("required", schema.required)
+            }
+            if (schema is ArraySchema && schema.items != null) {
+                put("items", schemaToMap(schema.items))
+            }
+            schema.enum?.let { put("enum", it) }
+        }
 
         internal fun operationName(
             httpMethod: PathItem.HttpMethod,
