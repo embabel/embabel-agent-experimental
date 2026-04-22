@@ -16,6 +16,7 @@
 package com.embabel.agent.api.client.openapi
 
 import com.embabel.agent.api.client.*
+import com.embabel.agent.api.client.model.ApiModel
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.agent.api.tool.progressive.UnfoldingTool
@@ -115,38 +116,67 @@ class OpenApiLearner : ApiLearner {
         }
 
         /**
+         * Build an [ApiModel] from a parsed OpenAPI spec.
+         *
+         * This is the canonical intermediate representation that preserves
+         * full schema information. Use it for interface generation, client
+         * codegen, or any downstream consumer that needs more than the lossy
+         * tool projection.
+         */
+        fun buildModel(source: String, openApi: OpenAPI): ApiModel =
+            OpenApiModelBuilder.build(source, openApi)
+
+        /**
          * Build a [ProgressiveTool] from a parsed OpenAPI spec.
          * Called by both the learner and [LearnedApiSpec.OpenApi.toFactory].
+         *
+         * Internally constructs an [ApiModel] and uses it for grouping and
+         * optional tag filtering, then materializes [OpenApiOperationTool]s
+         * for HTTP execution.
+         *
+         * @param tags optional set of OpenAPI tag names to include. When non-null,
+         *   only operations tagged with one of these values are exposed as tools.
+         *   Tag matching is case-insensitive.
          */
         fun buildTool(
             source: String,
             openApi: OpenAPI,
             credentials: ApiCredentials,
+            tags: Set<String>? = null,
         ): ProgressiveTool {
-            val baseUrl = resolveBaseUrl(openApi, source)
-            val restClient = buildRestClient(openApi, credentials)
-            val allTools = materializeTools(openApi, baseUrl, restClient)
-            val toolsByTag = groupByTag(openApi, allTools)
+            val model = buildModel(source, openApi)
+            val filtered = if (tags != null) model.filterByTags(tags) else model
 
-            val apiName = deriveApiName(openApi)
-            val apiDescription = deriveApiDescription(openApi, source)
+            val restClient = buildRestClient(openApi, credentials)
+            val allTools = materializeTools(openApi, filtered.baseUrl, restClient)
+
+            // Use the model's resource grouping (respects tag filtering)
+            val includedNames = filtered.allOperations.map { it.name }.toSet()
+            val includedTools = allTools.filterKeys { it in includedNames }
+
+            val toolsByResource = filtered.resources.associate { resource ->
+                resource.name to resource.operations.mapNotNull { op ->
+                    includedTools[op.name]
+                }
+            }.filterValues { it.isNotEmpty() }
 
             logger.info(
-                "Learned API '{}' from {}: {} operations in {} tags",
-                apiName, source, allTools.size, toolsByTag.size,
+                "Learned API '{}' from {}: {} operations in {} resources{}",
+                filtered.name, source, includedTools.size, toolsByResource.size,
+                if (tags != null) " (filtered from ${allTools.size} total)" else "",
             )
 
-            return if (toolsByTag.size == 1) {
+            return if (toolsByResource.size == 1) {
                 UnfoldingTool.of(
-                    name = apiName,
-                    description = apiDescription,
-                    innerTools = allTools.values.toList(),
+                    name = filtered.name,
+                    description = filtered.description,
+                    innerTools = toolsByResource.values.single(),
                 )
             } else {
                 UnfoldingTool.byCategory(
-                    name = apiName,
-                    description = apiDescription,
-                    toolsByCategory = toolsByTag.mapValues { it.value.toList() },
+                    name = filtered.name,
+                    description = filtered.description,
+                    toolsByCategory = toolsByResource,
                     removeOnInvoke = false,
                 )
             }

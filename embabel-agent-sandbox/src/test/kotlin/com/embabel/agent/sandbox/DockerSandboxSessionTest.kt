@@ -108,10 +108,10 @@ class DockerSandboxSessionTest {
         val netConfig = config.copy(network = true)
         session = DockerSandboxSession(label = "test", config = netConfig, ttl = 1.hours)
 
-        // Install a package (60s timeout for slow networks)
+        // Install a package (120s timeout for slow networks)
         val install = session!!.execute(ExecutionRequest(
             command = listOf("apk", "add", "--no-cache", "jq"),
-            timeout = 60.seconds,
+            timeout = 120.seconds,
         ))
         assertIs<ExecutionResult.Completed>(install)
         assertEquals(0, install.exitCode)

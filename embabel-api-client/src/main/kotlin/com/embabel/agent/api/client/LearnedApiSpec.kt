@@ -16,6 +16,7 @@
 package com.embabel.agent.api.client
 
 import com.embabel.agent.api.client.graphql.GraphQlLearner
+import com.embabel.agent.api.client.model.ApiModel
 import com.embabel.agent.api.client.openapi.OpenApiLearner
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.fasterxml.jackson.annotation.JsonTypeInfo
@@ -40,8 +41,20 @@ sealed interface LearnedApiSpec {
 
     /**
      * Create a factory function that produces a [ProgressiveTool] given credentials.
+     *
+     * @param tags optional set of tag names to include. When non-null, only
+     *   operations tagged with one of these values are exposed as tools.
      */
-    fun toFactory(): (ApiCredentials) -> ProgressiveTool
+    fun toFactory(tags: Set<String>? = null): (ApiCredentials) -> ProgressiveTool
+
+    /**
+     * Build an [ApiModel] from this spec, if supported.
+     *
+     * The model is the rich intermediate representation that preserves full
+     * schema information for both tool projection and interface generation.
+     * Returns `null` for spec types that don't yet support model construction.
+     */
+    fun toModel(): ApiModel? = null
 
     /**
      * OpenAPI spec — stores the raw spec content so it can be re-parsed without network access.
@@ -52,9 +65,14 @@ sealed interface LearnedApiSpec {
         override val learnedAt: Instant = Instant.now(),
     ) : LearnedApiSpec {
 
-        override fun toFactory(): (ApiCredentials) -> ProgressiveTool = { credentials ->
+        override fun toFactory(tags: Set<String>?): (ApiCredentials) -> ProgressiveTool = { credentials ->
             val openApi = OpenApiLearner.parseSpec(source, rawSpec)
-            OpenApiLearner.buildTool(source, openApi, credentials)
+            OpenApiLearner.buildTool(source, openApi, credentials, tags)
+        }
+
+        override fun toModel(): ApiModel {
+            val openApi = OpenApiLearner.parseSpec(source, rawSpec)
+            return OpenApiLearner.buildModel(source, openApi)
         }
     }
 
@@ -71,7 +89,7 @@ sealed interface LearnedApiSpec {
         override val learnedAt: Instant = Instant.now(),
     ) : LearnedApiSpec {
 
-        override fun toFactory(): (ApiCredentials) -> ProgressiveTool = { credentials ->
+        override fun toFactory(tags: Set<String>?): (ApiCredentials) -> ProgressiveTool = { credentials ->
             GraphQlLearner.buildTool(source, apiName, queryTypeName, mutationTypeName, credentials)
         }
     }
