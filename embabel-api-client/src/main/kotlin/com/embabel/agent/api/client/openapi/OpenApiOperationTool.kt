@@ -195,21 +195,63 @@ class OpenApiOperationTool(
 
         /**
          * Convert a Swagger [Schema] to a Map suitable for JSON
-         * serialization. Handles object, array, and primitive types.
+         * serialization. Handles object, array, primitive, oneOf/anyOf
+         * combinators, and nullable types.
+         *
+         * The output is consumed by `JavaScriptCodeSurfaceBuilder` /
+         * `PythonCodeSurfaceBuilder` to emit typed interfaces; missing
+         * fields here become `unknown` in the generated TypeScript.
          */
         private fun schemaToMap(schema: Schema<*>): Map<String, Any?> = buildMap {
-            put("type", schema.type ?: "object")
+            // Type inference: explicit `type` wins; otherwise infer from
+            // structure. A schema with `properties` but no `type` is
+            // implicitly object; a schema with `items` is implicitly array.
+            val inferredType = schema.type ?: when {
+                schema is ArraySchema || schema.items != null -> "array"
+                schema.properties != null -> "object"
+                schema.allOf != null || schema.oneOf != null || schema.anyOf != null -> "object"
+                else -> null
+            }
+            inferredType?.let { put("type", it) }
+
             schema.description?.let { put("description", it) }
+            schema.format?.let { put("format", it) }
+            // OpenAPI 3.0 nullable + 3.1 type:["x","null"] both map here.
+            if (schema.nullable == true) put("nullable", true)
+
             if (schema.properties != null) {
                 put("properties", schema.properties.mapValues { (_, v) -> schemaToMap(v) })
             }
             if (schema.required != null) {
                 put("required", schema.required)
             }
-            if (schema is ArraySchema && schema.items != null) {
-                put("items", schemaToMap(schema.items))
+            // Array items — handle both ArraySchema.items (typed) and
+            // generic Schema.items (post-resolveFully sometimes lands here).
+            val items = (schema as? ArraySchema)?.items ?: schema.items
+            if (items != null) {
+                put("items", schemaToMap(items))
             }
+
+            // allOf / oneOf / anyOf — emit a union or merged shape.
+            // Downstream TS emitter treats these as union types when the
+            // shape isn't an object merge.
+            schema.allOf?.let { branches ->
+                if (branches.isNotEmpty()) put("allOf", branches.map { schemaToMap(it) })
+            }
+            schema.oneOf?.let { branches ->
+                if (branches.isNotEmpty()) put("oneOf", branches.map { schemaToMap(it) })
+            }
+            schema.anyOf?.let { branches ->
+                if (branches.isNotEmpty()) put("anyOf", branches.map { schemaToMap(it) })
+            }
+
             schema.enum?.let { put("enum", it) }
+            // Additional properties — `Record<string, T>`-like maps.
+            when (val ap = schema.additionalProperties) {
+                is Schema<*> -> put("additionalProperties", schemaToMap(ap))
+                is Boolean -> put("additionalProperties", ap)
+                else -> {}
+            }
         }
 
         internal fun operationName(

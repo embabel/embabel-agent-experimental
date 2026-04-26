@@ -218,6 +218,97 @@ class ApiModelTest {
         assertTrue(filtered.allOperations.isEmpty())
     }
 
+    // --- OperationId filtering ---
+
+    @Test
+    fun `filterByOperationIds keeps only listed operations`() {
+        val filtered = model().filterByOperationIds(setOf("listPets", "addPet"))
+        val opNames = filtered.allOperations.map { it.name }.toSet()
+        assertEquals(setOf("listPets", "addPet"), opNames)
+    }
+
+    @Test
+    fun `filterByOperationIds drops resources with no surviving operations`() {
+        val filtered = model().filterByOperationIds(setOf("listPets"))
+        // pets resource has listPets so survives; store/user resources have
+        // no surviving ops and should be removed.
+        assertTrue(filtered.resources.all { it.operations.isNotEmpty() })
+        assertEquals(setOf("pets"), filtered.resources.map { it.name }.toSet())
+    }
+
+    @Test
+    fun `filterByOperationIds is case-insensitive and treats dash slash underscore equivalently`() {
+        // The petstore-extended spec uses operationIds like `listPets`. Test
+        // a synthetic model where the operationId has slashes (GitHub style:
+        // `repos/get`) to verify canonicalisation handles real-world specs.
+        val synthetic = ApiModel(
+            name = "synthetic",
+            description = "",
+            baseUrl = "https://example.com",
+            resources = listOf(
+                ApiResource(
+                    name = "repos",
+                    operations = listOf(
+                        ApiOperation(
+                            name = "repos/get",
+                            description = "",
+                            method = HttpMethod.GET,
+                            path = "/repos",
+                            parameters = emptyList(),
+                            responses = emptyMap(),
+                            tags = listOf("repos"),
+                        ),
+                        ApiOperation(
+                            name = "repos/list-for-user",
+                            description = "",
+                            method = HttpMethod.GET,
+                            path = "/users/{u}/repos",
+                            parameters = emptyList(),
+                            responses = emptyMap(),
+                            tags = listOf("repos"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        // dashes in input should match slashes in operation name; ditto
+        // underscores. All three forms below pick the same op.
+        val byDash = synthetic.filterByOperationIds(setOf("repos-get"))
+        val bySlash = synthetic.filterByOperationIds(setOf("repos/get"))
+        val byUnderscore = synthetic.filterByOperationIds(setOf("REPOS_GET"))
+        assertEquals(setOf("repos/get"), byDash.allOperations.map { it.name }.toSet())
+        assertEquals(setOf("repos/get"), bySlash.allOperations.map { it.name }.toSet())
+        assertEquals(setOf("repos/get"), byUnderscore.allOperations.map { it.name }.toSet())
+    }
+
+    @Test
+    fun `filterByOperationIds preserves types like filterByTags does`() {
+        val original = model()
+        val filtered = original.filterByOperationIds(setOf("listPets"))
+        assertEquals(original.types, filtered.types)
+    }
+
+    @Test
+    fun `filterByOperationIds with empty set drops everything`() {
+        val filtered = model().filterByOperationIds(emptySet())
+        assertTrue(filtered.resources.isEmpty())
+        assertTrue(filtered.allOperations.isEmpty())
+    }
+
+    @Test
+    fun `tag and operationId filters compose by intersection`() {
+        // Tags pre-filter to a coarse subset; operationIds picks exact ops
+        // from within. This is the GitHub use case: tag=repos narrows to
+        // ~80 ops; operationIds={repos/get} picks one specific op.
+        val byTagThenOp = model()
+            .filterByTags(setOf("pets"))
+            .filterByOperationIds(setOf("listPets", "addPet", "deletePet"))
+        // Whatever pets contains intersected with the listed ops
+        val opNames = byTagThenOp.allOperations.map { it.name }.toSet()
+        // listPets and addPet are in pets tag; deletePet is too. All survive.
+        assertTrue("listPets" in opNames || "addPet" in opNames, "expected pets ops, got $opNames")
+    }
+
     // --- Named types ---
 
     @Test

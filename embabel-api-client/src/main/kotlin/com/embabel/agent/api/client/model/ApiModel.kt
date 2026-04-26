@@ -51,10 +51,45 @@ data class ApiModel(
         )
     }
 
+    /**
+     * Return a new [ApiModel] containing only the operations whose
+     * sanitized name matches one of [operationIds]. Resources with no
+     * surviving operations are dropped. More precise than [filterByTags]:
+     * use this when a tag-group is much larger than the subset you
+     * actually want surfaced (GitHub's `repos` group has ~80 operations;
+     * most users want only `repos/get`).
+     *
+     * Match is against the sanitized operationId — the same string that
+     * becomes the tool name (e.g. `repos/get` → `repos_get`). Both
+     * dashed and snake_cased names accepted; canonicalised internally.
+     */
+    fun filterByOperationIds(operationIds: Set<String>): ApiModel {
+        val canonical = operationIds.map { it.canonicalOpId() }.toSet()
+        return copy(
+            resources = resources
+                .map { resource ->
+                    resource.copy(
+                        operations = resource.operations.filter {
+                            it.name.canonicalOpId() in canonical
+                        },
+                    )
+                }
+                .filter { it.operations.isNotEmpty() },
+        )
+    }
+
     /** All operations across all resources. */
     val allOperations: List<ApiOperation>
         get() = resources.flatMap { it.operations }
 }
+
+/**
+ * Canonicalise an operationId for case- and separator-insensitive matching
+ * (`repos/get` ≡ `repos-get` ≡ `REPOS_GET`). Used by [ApiModel.filterByOperationIds]
+ * and by callers wanting to diagnose typos in user-provided op-id allowlists.
+ */
+internal fun String.canonicalOpId(): String =
+    lowercase().replace('-', '_').replace('/', '_')
 
 /**
  * A group of related operations — corresponds to an OpenAPI tag

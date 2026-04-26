@@ -17,6 +17,7 @@ package com.embabel.agent.api.client.openapi
 
 import com.embabel.agent.api.client.*
 import com.embabel.agent.api.client.model.ApiModel
+import com.embabel.agent.api.client.model.canonicalOpId
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.agent.api.tool.progressive.UnfoldingTool
@@ -99,7 +100,19 @@ class OpenApiLearner : ApiLearner {
          */
         fun parseSpec(source: String, rawContent: String? = null): OpenAPI {
             val parseOptions = ParseOptions().apply {
+                // `isResolve` alone resolves only EXTERNAL $refs. Internal
+                // component refs (`$ref: "#/components/schemas/Issue"`) stay
+                // as bare ref nodes whose `.type` and `.properties` are null,
+                // so downstream type-extraction sees `{type: "object"}` with
+                // no fields and emits `Record<string, unknown>` in the
+                // generated TypeScript surface — wiping out the type info
+                // we just learned. `isResolveFully` inlines internal refs so
+                // schemas carry their actual structure. Cost: response
+                // schemas get larger (no shared named types). Acceptable
+                // trade for now; named-type extraction is a separate fix.
                 isResolve = true
+                isResolveFully = true
+                isResolveCombinators = true
             }
             val result = if (rawContent != null) {
                 OpenAPIParser().readContents(rawContent, null, parseOptions)
@@ -143,9 +156,31 @@ class OpenApiLearner : ApiLearner {
             openApi: OpenAPI,
             credentials: ApiCredentials,
             tags: Set<String>? = null,
+            operationIds: Set<String>? = null,
+            nameOverride: String? = null,
         ): ProgressiveTool {
             val model = buildModel(source, openApi)
-            val filtered = if (tags != null) model.filterByTags(tags) else model
+            val tagFiltered = if (tags != null) model.filterByTags(tags) else model
+            // operationIds, when set, narrows further. The two filters
+            // compose: tags narrow to a coarse subset, operationIds picks
+            // exact ops from within. Specifying only operationIds (no
+            // tags) lets the user pin a curated micro-surface from the
+            // entire spec without the tag intermediate.
+            val filtered = if (operationIds != null) tagFiltered.filterByOperationIds(operationIds) else tagFiltered
+            if (operationIds != null) {
+                // Surface op-ids that didn't match anything — silent drops
+                // turn a typo in apis.yml into "tool quietly missing" hours
+                // later. Compare against the post-tag-filter model so an
+                // op-id that exists but was excluded by a tag also warns.
+                val present = tagFiltered.allOperations.map { it.name.canonicalOpId() }.toSet()
+                val missing = operationIds.filter { it.canonicalOpId() !in present }
+                if (missing.isNotEmpty()) {
+                    logger.warn(
+                        "Requested operationIds not found in spec '{}': {}",
+                        filtered.name, missing,
+                    )
+                }
+            }
 
             val restClient = buildRestClient(openApi, credentials)
             val allTools = materializeTools(openApi, filtered.baseUrl, restClient)
@@ -166,15 +201,22 @@ class OpenApiLearner : ApiLearner {
                 if (tags != null) " (filtered from ${allTools.size} total)" else "",
             )
 
+            // The pack/workspace can override the spec-derived name so the
+            // gateway namespace matches what the pack author declared in
+            // apis.yml (and what their prompt examples reference). Without
+            // this, a pack with `name: gh` lands on `gateway.<spec-title>`,
+            // the model follows the examples to `gateway.gh.*`, and every
+            // call errors out — see issue trail in the assistant repo.
+            val toolName = nameOverride?.takeIf { it.isNotBlank() } ?: filtered.name
             return if (toolsByResource.size == 1) {
                 UnfoldingTool.of(
-                    name = filtered.name,
+                    name = toolName,
                     description = filtered.description,
                     innerTools = toolsByResource.values.single(),
                 )
             } else {
                 UnfoldingTool.byCategory(
-                    name = filtered.name,
+                    name = toolName,
                     description = filtered.description,
                     toolsByCategory = toolsByResource,
                     removeOnInvoke = false,

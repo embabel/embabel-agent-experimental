@@ -44,8 +44,20 @@ sealed interface LearnedApiSpec {
      *
      * @param tags optional set of tag names to include. When non-null, only
      *   operations tagged with one of these values are exposed as tools.
+     * @param operationIds optional set of exact operationIds to include.
+     *   Composes with [tags] (intersection); pin a micro-surface from a
+     *   large spec without tag granularity (e.g. GitHub's `repos` tag has
+     *   ~80 ops; you usually want only `repos/get`).
+     * @param nameOverride optional name to use for the resulting tool
+     *   instead of the one derived from the spec. The pack/workspace uses
+     *   this so the gateway namespace matches the pack author's declared
+     *   name (e.g. `gh`), not the verbose spec title (`githubV3RestApi`).
      */
-    fun toFactory(tags: Set<String>? = null): (ApiCredentials) -> ProgressiveTool
+    fun toFactory(
+        tags: Set<String>? = null,
+        operationIds: Set<String>? = null,
+        nameOverride: String? = null,
+    ): (ApiCredentials) -> ProgressiveTool
 
     /**
      * Build an [ApiModel] from this spec, if supported.
@@ -65,9 +77,13 @@ sealed interface LearnedApiSpec {
         override val learnedAt: Instant = Instant.now(),
     ) : LearnedApiSpec {
 
-        override fun toFactory(tags: Set<String>?): (ApiCredentials) -> ProgressiveTool = { credentials ->
+        override fun toFactory(
+            tags: Set<String>?,
+            operationIds: Set<String>?,
+            nameOverride: String?,
+        ): (ApiCredentials) -> ProgressiveTool = { credentials ->
             val openApi = OpenApiLearner.parseSpec(source, rawSpec)
-            OpenApiLearner.buildTool(source, openApi, credentials, tags)
+            OpenApiLearner.buildTool(source, openApi, credentials, tags, operationIds, nameOverride)
         }
 
         override fun toModel(): ApiModel {
@@ -89,8 +105,16 @@ sealed interface LearnedApiSpec {
         override val learnedAt: Instant = Instant.now(),
     ) : LearnedApiSpec {
 
-        override fun toFactory(tags: Set<String>?): (ApiCredentials) -> ProgressiveTool = { credentials ->
-            GraphQlLearner.buildTool(source, apiName, queryTypeName, mutationTypeName, credentials)
+        override fun toFactory(
+            tags: Set<String>?,
+            operationIds: Set<String>?,
+            nameOverride: String?,
+        ): (ApiCredentials) -> ProgressiveTool = { credentials ->
+            // GraphQL doesn't have OpenAPI tags or operationIds —
+            // ignored. Filtering by GraphQL field name is a separate
+            // feature when needed.
+            val effectiveName = nameOverride?.takeIf { it.isNotBlank() } ?: apiName
+            GraphQlLearner.buildTool(source, effectiveName, queryTypeName, mutationTypeName, credentials)
         }
     }
 }

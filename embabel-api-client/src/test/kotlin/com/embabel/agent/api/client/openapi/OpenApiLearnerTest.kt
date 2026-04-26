@@ -196,6 +196,79 @@ class OpenApiLearnerTest {
         }
     }
 
+    // --- Internal $ref resolution → typed outputSchema ---
+
+    @Test
+    fun `internal ref response is fully resolved into outputSchema metadata`() {
+        // Regression guard for the original failure: GitHub-shaped specs
+        // use `$ref: "#/components/schemas/Issue"` for response schemas.
+        // Before isResolveFully=true, the parser left those as bare ref
+        // nodes — the response Schema had `.type=null, .properties=null`,
+        // schemaToMap emitted `{type:"object"}`, and the JS code surface
+        // produced `Promise<Record<string, unknown>>`. After the fix
+        // (resolveFully + extended schemaToMap), the response shape is
+        // fully inlined and the metadata carries the actual properties.
+
+        val refsSpecUrl = javaClass.classLoader.getResource("petstore-with-refs.json")!!.toString()
+        val api = OpenApiLearner().learn(refsSpecUrl)
+        val tools = collectAllLeafTools(api.create())
+
+        val getById = tools.firstOrNull { it.definition.name == "getPetById" }
+            ?: error("getPetById tool not found among ${tools.map { it.definition.name }}")
+
+        val outputSchema = getById.definition.metadata["outputSchema"] as? String
+        assertNotNull(outputSchema, "outputSchema must be populated for ref'd response")
+        // The Pet schema's fields must be present — they came from the
+        // referenced component, not the operation's inline schema.
+        assertTrue(outputSchema!!.contains("\"id\""), "Expected 'id' field from Pet component:\n$outputSchema")
+        assertTrue(outputSchema.contains("\"name\""), "Expected 'name' field from Pet component:\n$outputSchema")
+        // Nested ref must also resolve (Pet → Category → its fields).
+        assertTrue(outputSchema.contains("\"category\""), "Expected nested 'category':\n$outputSchema")
+        // Nullable property survives.
+        assertTrue(outputSchema.contains("\"nullable\""), "Expected nullable marker on tag:\n$outputSchema")
+    }
+
+    @Test
+    fun `nameOverride replaces spec-derived tool name end-to-end`() {
+        // Pack authors declare `name: gh` in apis.yml expecting their
+        // gateway namespace to be `gateway.gh.*`. Without nameOverride the
+        // gateway namespace came from the OpenAPI spec title (e.g.
+        // `githubV3RestApi`), the pack's prompt examples referenced
+        // `gateway.gh.*`, the model followed the examples, every call
+        // failed with "gateway.gh is not a workspace tool", and the model
+        // fabricated answers. Verify the override changes the tool name
+        // through the full LearnedApiSpec.toFactory pipeline.
+
+        val spec = OpenApiLearner().learn(specUrl).spec!!
+        val factory = spec.toFactory(nameOverride = "gh")
+        val tool = factory(ApiCredentials.None)
+        assertEquals("gh", tool.definition.name)
+    }
+
+    @Test
+    fun `nameOverride with blank string falls back to spec-derived name`() {
+        val spec = OpenApiLearner().learn(specUrl).spec!!
+        val tool = spec.toFactory(nameOverride = "  ")(ApiCredentials.None)
+        assertEquals("petstore", tool.definition.name)
+    }
+
+    @Test
+    fun `array-of-ref response carries item structure into outputSchema`() {
+        val refsSpecUrl = javaClass.classLoader.getResource("petstore-with-refs.json")!!.toString()
+        val api = OpenApiLearner().learn(refsSpecUrl)
+        val tools = collectAllLeafTools(api.create())
+
+        val list = tools.firstOrNull { it.definition.name == "listPets" }
+            ?: error("listPets tool not found")
+        val outputSchema = list.definition.metadata["outputSchema"] as? String
+        assertNotNull(outputSchema)
+        assertTrue(outputSchema!!.contains("\"items\""), "Array response must carry items:\n$outputSchema")
+        // The Pet structure must be inlined under items, not lost as an
+        // empty `{type:"object"}` ref placeholder.
+        assertTrue(outputSchema.contains("\"id\""))
+        assertTrue(outputSchema.contains("\"name\""))
+    }
+
     // --- Helpers ---
 
     private fun collectAllLeafTools(tool: Tool): List<Tool> {
