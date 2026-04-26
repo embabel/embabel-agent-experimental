@@ -128,7 +128,15 @@ internal object OpenApiModelBuilder {
             "string" -> ApiSchema.Primitive(
                 type = PrimitiveType.STRING,
                 format = schema.format,
-                enumValues = schema.enum?.map { it.toString() },
+                // `schema.enum` is `List<Any?>` — OpenAPI 3.1 nullable enums
+                // commonly include `null` as a valid value (e.g. GitHub's
+                // spec uses this for state filters). Drop null entries
+                // rather than calling `.toString()` on them, which NPEs.
+                // Loss of the explicit-null enum value is acceptable here:
+                // typed-string surface doesn't represent it, and consumers
+                // already handle absent-value via the optional/nullable
+                // marker on the enclosing property.
+                enumValues = schema.enum?.mapNotNull { it?.toString() },
                 description = schema.description,
             )
             "integer" -> ApiSchema.Primitive(

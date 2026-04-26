@@ -270,7 +270,11 @@ class OpenApiOperationTool(
                 type = type,
                 description = param.description ?: param.name,
                 required = param.required ?: (param.`in` == "path"),
-                enumValues = param.schema?.enum?.map { it.toString() },
+                // OpenAPI 3.1 nullable enums commonly include explicit null
+                // (the GitHub spec uses this for state filters). Drop nulls
+                // rather than NPE on `.toString()`. Same fix as
+                // `OpenApiModelBuilder.convertSchema`.
+                enumValues = param.schema?.enum?.mapNotNull { it?.toString() },
                 itemType = itemType,
             )
         }
@@ -309,7 +313,7 @@ class OpenApiOperationTool(
                 type = type,
                 description = schema.description ?: description,
                 required = required,
-                enumValues = schema.enum?.map { it.toString() },
+                enumValues = schema.enum?.mapNotNull { it?.toString() },
                 properties = properties,
                 itemType = itemType,
             )

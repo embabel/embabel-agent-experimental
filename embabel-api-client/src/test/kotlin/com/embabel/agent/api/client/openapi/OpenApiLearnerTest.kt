@@ -157,6 +157,12 @@ class OpenApiLearnerTest {
         assertNotNull(statusParam)
         assertEquals(Tool.ParameterType.STRING, statusParam!!.type)
         assertFalse(statusParam.required)
+        // Fixture contains `["available", "pending", "sold", null]` — the
+        // null must be filtered, not NPE. OpenAPI 3.1 nullable enums
+        // commonly include explicit null (the GitHub spec uses this for
+        // state filters); the learner used to crash trying to .toString()
+        // it. Assertion is the post-filter list; the regression guard is
+        // that this test runs at all (the learner doesn't throw).
         assertEquals(listOf("available", "pending", "sold"), statusParam.enumValues)
     }
 

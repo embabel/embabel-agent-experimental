@@ -25,7 +25,7 @@
             "required": false,
             "schema": {
               "type": "string",
-              "enum": ["available", "pending", "sold"]
+              "enum": ["available", "pending", "sold", null]
             }
           },
           {
