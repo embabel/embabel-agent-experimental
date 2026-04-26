@@ -167,13 +167,19 @@ class OpenApiLearnerTest {
     }
 
     @Test
-    fun `request body is mapped as body parameter`() {
+    fun `request body is inlined at the top level (no body wrapper)`() {
         val addPet = findTool(learned().create(), "addPet")!!
-        val bodyParam = addPet.definition.inputSchema.parameters.find { it.name == "body" }
-        assertNotNull(bodyParam)
-        assertEquals(Tool.ParameterType.OBJECT, bodyParam!!.type)
-        assertNotNull(bodyParam.properties)
-        assertTrue(bodyParam.properties!!.any { it.name == "name" })
+        val params = addPet.definition.inputSchema.parameters
+        // The legacy `body` wrapper caused HTTP 422 collisions for ops
+        // whose request body has a property literally named `body`
+        // (every GitHub `issues/create`, `pulls/create`, etc.). The
+        // wrapper is gone — body properties appear at top level alongside
+        // path/query params.
+        assertTrue(
+            params.none { it.name == "body" && it.type == Tool.ParameterType.OBJECT },
+            "Expected no body wrapper, got: ${params.map { it.name }}",
+        )
+        assertTrue(params.any { it.name == "name" }, "Expected 'name' inlined at top level")
     }
 
     @Test

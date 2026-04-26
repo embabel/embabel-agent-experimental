@@ -65,7 +65,7 @@ class OpenApiOperationTool(
 
             val resolvedPath = resolvePath(path, params)
             val queryParams = resolveQueryParams(params)
-            val body = params["body"]
+            val body = resolveBody(params)
 
             val uri = buildUri(resolvedPath, queryParams)
 
@@ -116,6 +116,58 @@ class OpenApiOperationTool(
     private fun pathParameterNames(): List<String> {
         val regex = "\\{([^}]+)}".toRegex()
         return regex.findAll(path).map { it.groupValues[1] }.toList()
+    }
+
+    /**
+     * Build the request body from the caller's flat argument map.
+     *
+     * Inputs are accepted in two shapes:
+     *   1. **Flat** (preferred — matches the typed surface):
+     *      `{owner, repo, title, body, labels}` — body fields appear at
+     *      the top level alongside path/query params. The tool gathers
+     *      every property the request-body schema declares (minus path/
+     *      query names, since those win on collision).
+     *   2. **Wrapper** (legacy / non-object body):
+     *      `{owner, repo, body: {title, body}}` — body nested under a
+     *      reserved `body` key. Used when the request body is non-object
+     *      (raw string, array) or when the caller chose to send a wrapper.
+     *
+     * If both shapes are present (legacy `body: {...}` plus flat fields),
+     * the flat fields override matching keys in the wrapper.
+     *
+     * The flat shape eliminates the body-name-collision bug for ops whose
+     * request body has a property named `body` (e.g. GitHub `issues/create`,
+     * `issues/create-comment`, `pulls/create`).
+     */
+    private fun resolveBody(params: Map<String, Any?>): Any? {
+        val bodySchema = operation.requestBody?.content?.values?.firstOrNull()?.schema
+            ?: return null
+
+        val bodyProps = bodySchema.properties?.keys?.toSet().orEmpty()
+        val isObjectBody = (bodySchema.type == "object" || bodyProps.isNotEmpty())
+
+        if (!isObjectBody) {
+            // Non-object body — use the wrapper key directly.
+            return params["body"]
+        }
+
+        val pathParams = pathParameterNames().toSet()
+        val queryParamNames = (operation.parameters ?: emptyList())
+            .filter { it.`in` == "query" }
+            .map { it.name }
+            .toSet()
+        val flat = params.filter { (k, _) ->
+            k in bodyProps && k !in pathParams && k !in queryParamNames
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val wrapper = params["body"] as? Map<String, Any?>
+        return when {
+            wrapper != null && flat.isNotEmpty() -> wrapper + flat
+            wrapper != null -> wrapper
+            flat.isNotEmpty() -> flat
+            else -> null
+        }
     }
 
     private fun buildUri(resolvedPath: String, queryParams: Map<String, List<String>>): String {
@@ -289,10 +341,39 @@ class OpenApiOperationTool(
             operation.parameters?.forEach { param ->
                 parameters.add(mapParameter(param))
             }
+            val pathQueryNames = parameters.map { it.name }.toSet()
 
-            // Request body
+            // Request body — INLINE the body's properties at the top level
+            // so the typed surface presents a flat callable shape:
+            //   issuesCreate({owner, repo, title, body, labels})
+            // not the legacy nested wrapper:
+            //   issuesCreate({owner, repo, body: {title, body, labels}})
+            // The wrapper form created a name-collision footgun (a request
+            // body containing a property named `body` — every GitHub
+            // `issues/create`, `issues/create-comment`, `pulls/create` — got
+            // reduced to a string by the LLM and rejected with HTTP 422).
             operation.requestBody?.content?.values?.firstOrNull()?.schema?.let { schema ->
-                parameters.add(mapSchemaToParameter("body", schema, "Request body", true))
+                val bodyRequiredOverall = operation.requestBody?.required ?: false
+                @Suppress("UNCHECKED_CAST")
+                val properties = schema.properties as? Map<String, Schema<*>>
+                if (!properties.isNullOrEmpty()) {
+                    val bodyRequired = (schema.required as? List<*>)?.map { it.toString() }?.toSet().orEmpty()
+                    for ((propName, propSchema) in properties) {
+                        if (propName in pathQueryNames) continue // path/query wins on collision
+                        parameters.add(
+                            mapSchemaToParameter(
+                                name = propName,
+                                schema = propSchema,
+                                description = propSchema.description ?: propName,
+                                required = bodyRequiredOverall && propName in bodyRequired,
+                            ),
+                        )
+                    }
+                } else {
+                    // Non-object body (raw string, array, etc.) — keep the
+                    // legacy `body` wrapper since there's nothing to flatten.
+                    parameters.add(mapSchemaToParameter("body", schema, "Request body", true))
+                }
             }
 
             return Tool.InputSchema.of(*parameters.toTypedArray())

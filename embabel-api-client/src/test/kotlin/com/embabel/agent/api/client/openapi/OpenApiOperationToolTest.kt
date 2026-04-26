@@ -366,104 +366,99 @@ class OpenApiOperationToolTest {
             assertFalse(tagsParam.required)
         }
 
-        // --- Request body ---
+        // --- Request body — INLINED at top level (flat surface) ---
+        // The request body's properties appear as top-level parameters
+        // alongside path/query params. There is no `body` wrapper for
+        // object-shaped bodies; that wrapper caused HTTP 422 collisions
+        // with operations whose body has a property literally named `body`
+        // (every GitHub `issues/create`, `pulls/create`, etc.).
 
         @Test
-        fun `request body mapped as body parameter`() {
+        fun `body properties inlined at top level for object body`() {
             val addPet = findToolFromSpec(minimalSpec, "addPet")!!
-            val bodyParam = addPet.definition.inputSchema.parameters.find { it.name == "body" }
-            assertNotNull(bodyParam)
-            assertEquals(Tool.ParameterType.OBJECT, bodyParam!!.type)
-            assertTrue(bodyParam.required)
+            val params = addPet.definition.inputSchema.parameters
+            // Body wrapper is gone; body properties are top-level.
+            assertTrue(params.none { it.name == "body" }, "Expected no body wrapper, got: ${params.map { it.name }}")
+            assertTrue(params.any { it.name == "name" })
+            assertTrue(params.any { it.name == "tag" })
         }
 
         @Test
-        fun `request body has nested properties`() {
+        fun `required body properties marked required`() {
             val addPet = findToolFromSpec(minimalSpec, "addPet")!!
-            val bodyParam = addPet.definition.inputSchema.parameters.find { it.name == "body" }!!
-            assertNotNull(bodyParam.properties)
-            assertTrue(bodyParam.properties!!.any { it.name == "name" })
-            assertTrue(bodyParam.properties!!.any { it.name == "tag" })
-        }
-
-        @Test
-        fun `required properties in body are marked required`() {
-            val addPet = findToolFromSpec(minimalSpec, "addPet")!!
-            val bodyParam = addPet.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val nameParam = bodyParam.properties!!.find { it.name == "name" }!!
-            assertTrue(nameParam.required)
-            val tagParam = bodyParam.properties!!.find { it.name == "tag" }!!
+            val params = addPet.definition.inputSchema.parameters
+            val nameParam = params.find { it.name == "name" }!!
+            assertTrue(nameParam.required, "name is in body's required list")
+            val tagParam = params.find { it.name == "tag" }!!
             assertFalse(tagParam.required)
         }
 
         @Test
-        fun `body with enum property`() {
+        fun `body enum property surfaces at top level`() {
             val addPet = findToolFromSpec(extendedSpec, "addPet")!!
-            val bodyParam = addPet.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val statusProp = bodyParam.properties!!.find { it.name == "status" }!!
-            assertEquals(listOf("available", "pending", "sold"), statusProp.enumValues)
+            val params = addPet.definition.inputSchema.parameters
+            val statusParam = params.find { it.name == "status" }!!
+            assertEquals(listOf("available", "pending", "sold"), statusParam.enumValues)
         }
 
         @Test
-        fun `body with array property has itemType`() {
+        fun `body array property carries itemType`() {
             val addPet = findToolFromSpec(extendedSpec, "addPet")!!
-            val bodyParam = addPet.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val photoUrlsProp = bodyParam.properties!!.find { it.name == "photoUrls" }!!
-            assertEquals(Tool.ParameterType.ARRAY, photoUrlsProp.type)
-            assertEquals(Tool.ParameterType.STRING, photoUrlsProp.itemType)
+            val params = addPet.definition.inputSchema.parameters
+            val photoUrlsParam = params.find { it.name == "photoUrls" }!!
+            assertEquals(Tool.ParameterType.ARRAY, photoUrlsParam.type)
+            assertEquals(Tool.ParameterType.STRING, photoUrlsParam.itemType)
         }
 
         @Test
-        fun `body with nested object property`() {
+        fun `body nested object property keeps its own properties`() {
             val addPet = findToolFromSpec(extendedSpec, "addPet")!!
-            val bodyParam = addPet.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val categoryProp = bodyParam.properties!!.find { it.name == "category" }!!
-            assertEquals(Tool.ParameterType.OBJECT, categoryProp.type)
-            assertNotNull(categoryProp.properties)
-            assertTrue(categoryProp.properties!!.any { it.name == "id" })
-            assertTrue(categoryProp.properties!!.any { it.name == "name" })
+            val params = addPet.definition.inputSchema.parameters
+            val categoryParam = params.find { it.name == "category" }!!
+            assertEquals(Tool.ParameterType.OBJECT, categoryParam.type)
+            assertNotNull(categoryParam.properties)
+            assertTrue(categoryParam.properties!!.any { it.name == "id" })
+            assertTrue(categoryParam.properties!!.any { it.name == "name" })
         }
 
         @Test
-        fun `body with boolean property`() {
+        fun `body boolean property keeps its type`() {
             val placeOrder = findToolFromSpec(extendedSpec, "placeOrder")!!
-            val bodyParam = placeOrder.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val completeProp = bodyParam.properties!!.find { it.name == "complete" }!!
-            assertEquals(Tool.ParameterType.BOOLEAN, completeProp.type)
+            val params = placeOrder.definition.inputSchema.parameters
+            val completeParam = params.find { it.name == "complete" }!!
+            assertEquals(Tool.ParameterType.BOOLEAN, completeParam.type)
         }
 
         @Test
-        fun `body with integer property`() {
+        fun `body integer property keeps its type`() {
             val placeOrder = findToolFromSpec(extendedSpec, "placeOrder")!!
-            val bodyParam = placeOrder.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val petIdProp = bodyParam.properties!!.find { it.name == "petId" }!!
-            assertEquals(Tool.ParameterType.INTEGER, petIdProp.type)
+            val params = placeOrder.definition.inputSchema.parameters
+            val petIdParam = params.find { it.name == "petId" }!!
+            assertEquals(Tool.ParameterType.INTEGER, petIdParam.type)
         }
 
         // --- Operations with both path params and body ---
 
         @Test
-        fun `PUT with path param and body`() {
+        fun `PUT with path param flattens body alongside`() {
             val updatePet = findToolFromSpec(extendedSpec, "updatePet")!!
             val params = updatePet.definition.inputSchema.parameters
-            val petIdParam = params.find { it.name == "petId" }
-            assertNotNull(petIdParam)
-            assertTrue(petIdParam!!.required)
-            val bodyParam = params.find { it.name == "body" }
-            assertNotNull(bodyParam)
-            assertEquals(Tool.ParameterType.OBJECT, bodyParam!!.type)
+            val petIdParam = params.find { it.name == "petId" }!!
+            assertTrue(petIdParam.required)
+            // Body fields appear at top level — no wrapper.
+            assertTrue(params.none { it.name == "body" })
+            assertTrue(params.any { it.name == "name" }, "Expected updatePet body 'name' inlined")
         }
 
         @Test
-        fun `PUT user with string path param and body`() {
+        fun `PUT user with string path param flattens body alongside`() {
             val updateUser = findToolFromSpec(extendedSpec, "updateUser")!!
             val params = updateUser.definition.inputSchema.parameters
-            val usernameParam = params.find { it.name == "username" }
-            assertNotNull(usernameParam)
-            assertEquals(Tool.ParameterType.STRING, usernameParam!!.type)
+            val usernameParam = params.find { it.name == "username" }!!
+            assertEquals(Tool.ParameterType.STRING, usernameParam.type)
             assertTrue(usernameParam.required)
-            val bodyParam = params.find { it.name == "body" }
-            assertNotNull(bodyParam)
+            // No `body` wrapper — body fields at top level.
+            assertTrue(params.none { it.name == "body" })
         }
 
         // --- Operation with no parameters ---
@@ -927,7 +922,7 @@ class OpenApiOperationToolTest {
     inner class WriteRequestTests {
 
         @Test
-        fun `POST with JSON body`() {
+        fun `POST with JSON body — flat call`() {
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.POST, "/pets",
                 operation = Operation().apply {
@@ -946,10 +941,84 @@ class OpenApiOperationToolTest {
             server.expect(requestTo("https://api.example.com/pets"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(content().json("""{"name": "Rex"}"""))
+                .andRespond(withSuccess("""{"id": 1, "name": "Rex"}""", MediaType.APPLICATION_JSON))
+
+            // Flat call (preferred — what the typed surface emits)
+            val result = tool.call("""{"name": "Rex"}""")
+            assertIsText(result, """{"id": 1, "name": "Rex"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST with JSON body — legacy wrapper still accepted`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/pets",
+                operation = Operation().apply {
+                    operationId = "addPet"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType("application/json", io.swagger.v3.oas.models.media.MediaType().apply {
+                                schema = ObjectSchema().apply {
+                                    addProperty("name", StringSchema())
+                                }
+                            })
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/pets"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(content().json("""{"name": "Rex"}"""))
                 .andRespond(withSuccess("""{"id": 1, "name": "Rex"}""", MediaType.APPLICATION_JSON))
 
             val result = tool.call("""{"body": {"name": "Rex"}}""")
             assertIsText(result, """{"id": 1, "name": "Rex"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST with body property literally named 'body' — no collision`() {
+            // Regression: GitHub `issues/create` request body shape — has
+            // properties `title` and `body`. Before the fix the tool input
+            // schema wrapped everything under `body`, so a flat call from
+            // the typed surface ended up with `params["body"] = "<issue
+            // body text>"` (a string). RestClient sent the raw string and
+            // GitHub returned HTTP 422 with a confusing schema error.
+            // After the fix, body fields are inlined; `title` and `body`
+            // are separate top-level params and reach the wire correctly.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/repos/{owner}/{repo}/issues",
+                operation = Operation().apply {
+                    operationId = "issues/create"
+                    parameters = listOf(
+                        Parameter().apply { name = "owner"; `in` = "path"; required = true; schema = StringSchema() },
+                        Parameter().apply { name = "repo"; `in` = "path"; required = true; schema = StringSchema() },
+                    )
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType("application/json", io.swagger.v3.oas.models.media.MediaType().apply {
+                                schema = ObjectSchema().apply {
+                                    addProperty("title", StringSchema())
+                                    addProperty("body", StringSchema())
+                                }
+                                schema.required = listOf("title")
+                            })
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/repos/embabel/assistant/issues"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(content().json("""{"title": "Hello", "body": "World"}"""))
+                .andRespond(withSuccess("""{"number": 1}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call(
+                """{"owner": "embabel", "repo": "assistant", "title": "Hello", "body": "World"}""",
+            )
+            assertIsText(result, """{"number": 1}""")
             server.verify()
         }
 
@@ -1183,10 +1252,10 @@ class OpenApiOperationToolTest {
         @Test
         fun `addPet has body with required name`() {
             val tool = findToolFromSpec(minimalSpec, "addPet")!!
-            val body = tool.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val nameProp = body.properties!!.find { it.name == "name" }!!
-            assertTrue(nameProp.required)
-            assertEquals(Tool.ParameterType.STRING, nameProp.type)
+            val params = tool.definition.inputSchema.parameters
+            val nameParam = params.find { it.name == "name" }!!
+            assertTrue(nameParam.required)
+            assertEquals(Tool.ParameterType.STRING, nameParam.type)
         }
 
         @Test
@@ -1215,9 +1284,9 @@ class OpenApiOperationToolTest {
         @Test
         fun `createUser has body with required username`() {
             val tool = findToolFromSpec(minimalSpec, "createUser")!!
-            val body = tool.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val usernameProp = body.properties!!.find { it.name == "username" }!!
-            assertTrue(usernameProp.required)
+            val params = tool.definition.inputSchema.parameters
+            val usernameParam = params.find { it.name == "username" }!!
+            assertTrue(usernameParam.required)
         }
     }
 
@@ -1269,14 +1338,13 @@ class OpenApiOperationToolTest {
         @Test
         fun `addPet body has nested object and array properties`() {
             val tool = findToolFromSpec(extendedSpec, "addPet")!!
-            val body = tool.definition.inputSchema.parameters.find { it.name == "body" }!!
-            assertNotNull(body.properties)
+            val params = tool.definition.inputSchema.parameters
 
-            val photoUrls = body.properties!!.find { it.name == "photoUrls" }!!
+            val photoUrls = params.find { it.name == "photoUrls" }!!
             assertEquals(Tool.ParameterType.ARRAY, photoUrls.type)
             assertEquals(Tool.ParameterType.STRING, photoUrls.itemType)
 
-            val category = body.properties!!.find { it.name == "category" }!!
+            val category = params.find { it.name == "category" }!!
             assertEquals(Tool.ParameterType.OBJECT, category.type)
             val catId = category.properties!!.find { it.name == "id" }!!
             assertEquals(Tool.ParameterType.INTEGER, catId.type)
@@ -1285,8 +1353,7 @@ class OpenApiOperationToolTest {
         @Test
         fun `placeOrder body has multiple types`() {
             val tool = findToolFromSpec(extendedSpec, "placeOrder")!!
-            val body = tool.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val props = body.properties!!.associate { it.name to it.type }
+            val props = tool.definition.inputSchema.parameters.associate { it.name to it.type }
             assertEquals(Tool.ParameterType.INTEGER, props["petId"])
             assertEquals(Tool.ParameterType.INTEGER, props["quantity"])
             assertEquals(Tool.ParameterType.STRING, props["shipDate"])
@@ -1297,27 +1364,28 @@ class OpenApiOperationToolTest {
         @Test
         fun `placeOrder status has enum values`() {
             val tool = findToolFromSpec(extendedSpec, "placeOrder")!!
-            val body = tool.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val statusProp = body.properties!!.find { it.name == "status" }!!
-            assertEquals(listOf("placed", "approved", "delivered"), statusProp.enumValues)
+            val statusParam = tool.definition.inputSchema.parameters.find { it.name == "status" }!!
+            assertEquals(listOf("placed", "approved", "delivered"), statusParam.enumValues)
         }
 
         @Test
-        fun `updatePet has both path param and body`() {
+        fun `updatePet has both path param and inlined body fields`() {
             val tool = findToolFromSpec(extendedSpec, "updatePet")!!
             val params = tool.definition.inputSchema.parameters
             assertTrue(params.any { it.name == "petId" && it.required })
-            assertTrue(params.any { it.name == "body" && it.type == Tool.ParameterType.OBJECT })
+            assertTrue(params.none { it.name == "body" }, "Expected body wrapper to be removed")
+            // updatePet body has the same shape as addPet — name appears at top level.
+            assertTrue(params.any { it.name == "name" })
         }
 
         @Test
-        fun `uploadPetImage has path param and body`() {
+        fun `uploadPetImage has path param and inlined body fields`() {
             val tool = findToolFromSpec(extendedSpec, "uploadPetImage")!!
             val params = tool.definition.inputSchema.parameters
             val petIdParam = params.find { it.name == "petId" }!!
             assertTrue(petIdParam.required)
-            val bodyParam = params.find { it.name == "body" }!!
-            assertNotNull(bodyParam.properties!!.find { it.name == "url" })
+            // body wrapper gone — `url` lifted to top level.
+            assertTrue(params.any { it.name == "url" })
         }
 
         @Test
@@ -1336,8 +1404,8 @@ class OpenApiOperationToolTest {
             val usernameParam = params.find { it.name == "username" }!!
             assertEquals(Tool.ParameterType.STRING, usernameParam.type)
             assertTrue(usernameParam.required)
-            val bodyParam = params.find { it.name == "body" }!!
-            assertEquals(Tool.ParameterType.OBJECT, bodyParam.type)
+            // No `body` wrapper — body fields lifted to top level.
+            assertTrue(params.none { it.name == "body" })
         }
 
         @Test
@@ -1352,16 +1420,15 @@ class OpenApiOperationToolTest {
         @Test
         fun `createUser body has required username and optional fields`() {
             val tool = findToolFromSpec(extendedSpec, "createUser")!!
-            val body = tool.definition.inputSchema.parameters.find { it.name == "body" }!!
-            val props = body.properties!!
-            val usernameProp = props.find { it.name == "username" }!!
-            assertTrue(usernameProp.required)
-            val emailProp = props.find { it.name == "email" }!!
-            assertFalse(emailProp.required)
-            val phoneProp = props.find { it.name == "phone" }!!
-            assertFalse(phoneProp.required)
-            val statusProp = props.find { it.name == "userStatus" }!!
-            assertEquals(Tool.ParameterType.INTEGER, statusProp.type)
+            val params = tool.definition.inputSchema.parameters
+            val usernameParam = params.find { it.name == "username" }!!
+            assertTrue(usernameParam.required)
+            val emailParam = params.find { it.name == "email" }!!
+            assertFalse(emailParam.required)
+            val phoneParam = params.find { it.name == "phone" }!!
+            assertFalse(phoneParam.required)
+            val statusParam = params.find { it.name == "userStatus" }!!
+            assertEquals(Tool.ParameterType.INTEGER, statusParam.type)
         }
 
         @Test
