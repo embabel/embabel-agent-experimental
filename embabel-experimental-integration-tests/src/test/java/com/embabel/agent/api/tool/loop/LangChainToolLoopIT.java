@@ -97,8 +97,9 @@ class LangChainToolLoopIT extends AbstractToolLoopTest {
             null,  // no tool decorator
             List.of(callbackTracker, createLoggingInspector()),
             List.of(truncatingTransformer, slidingWindowTransformer),
-                ToolCallContext.EMPTY,
-                ImmediateThrowPolicy.INSTANCE
+            List.of(),  // toolCallInspectors (empty for non-streaming)
+            ToolCallContext.EMPTY,
+            ImmediateThrowPolicy.INSTANCE
         );
 
         var toolNames = tools.stream()

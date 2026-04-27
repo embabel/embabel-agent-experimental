@@ -98,6 +98,7 @@ class OpenAiToolLoopIT extends AbstractToolLoopTest {
             null,  // no tool decorator
             List.of(callbackTracker, createLoggingInspector()),
             List.of(truncatingTransformer, slidingWindowTransformer),
+            List.of(),  // toolCallInspectors (empty for non-streaming)
             ToolCallContext.EMPTY,
             ImmediateThrowPolicy.INSTANCE
         );
