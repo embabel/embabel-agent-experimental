@@ -26,6 +26,7 @@ import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.parameters.Parameter
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientResponseException
 import org.springframework.web.util.UriComponentsBuilder
@@ -75,8 +76,33 @@ class OpenApiOperationTool(
             logger.info("Calling {} {} (baseUrl={})", httpMethod, uri, baseUrl)
 
             val response = executeRequest(uri, body)
-            logger.info("Completed {} {} in {}ms", httpMethod, uri, System.currentTimeMillis() - started)
-            Tool.Result.text(response ?: "")
+            val elapsed = System.currentTimeMillis() - started
+            val status = response.statusCode.value()
+            logger.info("Completed {} {} -> {} in {}ms", httpMethod, uri, status, elapsed)
+            val responseBody = response.body
+            if (responseBody.isNullOrBlank()) {
+                // Empty body handling differs by method:
+                //  - GET with empty body is degenerate — the model can't act
+                //    on nothing. Common cause: a synthesized OpenAPI spec
+                //    omits required query params, so they get silently
+                //    dropped and the API returns an empty 200. Without an
+                //    error, the model retries the same call in a loop.
+                //  - DELETE/POST/PUT/PATCH legitimately return 204 No
+                //    Content (or 200 with empty body) on success. Return a
+                //    non-empty status indicator so the caller knows the
+                //    operation succeeded — and so we never produce
+                //    Tool.Result.text("") (which downstream wraps in a
+                //    TextPart that rejects empty content).
+                return if (httpMethod == PathItem.HttpMethod.GET) {
+                    Tool.Result.error(
+                        "Empty response body from GET $uri (HTTP $status with no content). " +
+                            "If this operation requires query parameters, they may not be declared in the OpenAPI spec.",
+                    )
+                } else {
+                    Tool.Result.text("HTTP $status (no response body)")
+                }
+            }
+            Tool.Result.text(responseBody)
         } catch (e: RestClientResponseException) {
             val errorBody = e.responseBodyAsString
             val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path after ${System.currentTimeMillis() - started}ms: ${errorBody.take(200)}"
@@ -104,6 +130,22 @@ class OpenApiOperationTool(
         return resolved
     }
 
+    /**
+     * Resolve query parameters from the caller's argument map.
+     *
+     * Behaviour:
+     *  - Declared query params (from the spec) always pass through.
+     *  - For GET and DELETE, **undeclared** scalar/array params are also
+     *    forwarded as query strings. This is the permissive mode: real APIs
+     *    have many query parameters, and OpenAPI specs in the wild — and
+     *    especially synthesized specs — frequently omit them. Silently
+     *    dropping the LLM's args produces an empty/unfiltered request and
+     *    sends the model into a retry loop with no diagnostic. Forwarding
+     *    them lets the call succeed; if the server rejects unknown params
+     *    that's a real signal the LLM can act on.
+     *  - Path params, the reserved `body` key, and request-body properties
+     *    (for methods with bodies) are excluded from the query string.
+     */
     private fun resolveQueryParams(params: Map<String, Any?>): Map<String, List<String>> {
         val pathParams = pathParameterNames().toSet()
         val queryParamNames = (operation.parameters ?: emptyList())
@@ -111,8 +153,20 @@ class OpenApiOperationTool(
             .map { it.name }
             .toSet()
 
+        val isReadOnly = httpMethod == PathItem.HttpMethod.GET ||
+            httpMethod == PathItem.HttpMethod.DELETE
+        val bodyPropNames: Set<String> = if (isReadOnly) {
+            emptySet()
+        } else {
+            operation.requestBody?.content?.values?.firstOrNull()?.schema
+                ?.properties?.keys?.toSet().orEmpty()
+        }
+
         return params
-            .filter { it.key in queryParamNames && it.key !in pathParams && it.key != "body" }
+            .filter { (k, _) ->
+                k != "body" && k !in pathParams && k !in bodyPropNames &&
+                    (k in queryParamNames || isReadOnly)
+            }
             .filter { it.value != null }
             .mapValues { entry ->
                 when (val v = entry.value) {
@@ -192,13 +246,13 @@ class OpenApiOperationTool(
         return builder.build().toUriString()
     }
 
-    private fun executeRequest(uri: String, body: Any?): String? {
+    private fun executeRequest(uri: String, body: Any?): ResponseEntity<String> {
         return when (httpMethod) {
             PathItem.HttpMethod.GET -> restClient.get().uri(uri)
-                .retrieve().body(String::class.java)
+                .retrieve().toEntity(String::class.java)
 
             PathItem.HttpMethod.DELETE -> restClient.delete().uri(uri)
-                .retrieve().body(String::class.java)
+                .retrieve().toEntity(String::class.java)
 
             PathItem.HttpMethod.POST -> executeWithBody(restClient.post().uri(uri), body)
             PathItem.HttpMethod.PUT -> executeWithBody(restClient.put().uri(uri), body)
@@ -211,12 +265,12 @@ class OpenApiOperationTool(
     private fun executeWithBody(
         spec: RestClient.RequestBodySpec,
         body: Any?,
-    ): String? {
+    ): ResponseEntity<String> {
         if (body != null) {
             spec.contentType(MediaType.APPLICATION_JSON)
                 .body(objectMapper.writeValueAsString(body))
         }
-        return spec.retrieve().body(String::class.java)
+        return spec.retrieve().toEntity(String::class.java)
     }
 
     companion object {

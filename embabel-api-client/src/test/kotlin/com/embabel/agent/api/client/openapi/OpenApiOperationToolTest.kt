@@ -720,7 +720,14 @@ class OpenApiOperationToolTest {
         }
 
         @Test
-        fun `GET ignores unknown parameters - they are not added as query params`() {
+        fun `GET forwards undeclared parameters as query string (permissive mode)`() {
+            // Real-world specs — and especially synthesized specs from API
+            // discovery — frequently omit query params that the server
+            // actually accepts. Silently dropping them sends the model into
+            // a retry loop because it sees an empty / unfiltered response
+            // and assumes its arguments were wrong. Forward them instead;
+            // the server will reject genuinely unknown params with a real
+            // error the model can act on.
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.GET, "/pets",
                 operation = Operation().apply {
@@ -734,11 +741,13 @@ class OpenApiOperationToolTest {
                     )
                 },
             )
-            server.expect(requestTo("https://api.example.com/pets?limit=10"))
+            server.expect(requestTo(allOf(
+                containsString("limit=10"),
+                containsString("unknown=value"),
+            )))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
 
-            // "unknown" should not appear in query string
             val result = tool.call("""{"limit": 10, "unknown": "value"}""")
             assertIsText(result, "[]")
             server.verify()
@@ -1106,7 +1115,11 @@ class OpenApiOperationToolTest {
         }
 
         @Test
-        fun `DELETE with path parameter`() {
+        fun `DELETE with path parameter and 204 returns success indicator not empty text`() {
+            // 204 No Content is the standard success response for DELETE.
+            // The tool must produce a non-empty Text result so downstream
+            // consumers (which wrap it in a TextPart that rejects empty
+            // strings) don't crash.
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.DELETE, "/pets/{petId}",
                 operation = Operation().apply {
@@ -1123,10 +1136,12 @@ class OpenApiOperationToolTest {
             )
             server.expect(requestTo("https://api.example.com/pets/42"))
                 .andExpect(method(HttpMethod.DELETE))
-                .andRespond(withSuccess("", MediaType.APPLICATION_JSON))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.NO_CONTENT))
 
             val result = tool.call("""{"petId": 42}""")
-            assertInstanceOf(Tool.Result.Text::class.java, result)
+            val text = assertInstanceOf(Tool.Result.Text::class.java, result)
+            assertTrue(text.content.isNotBlank(), "must be non-empty, got: '${text.content}'")
+            assertTrue(text.content.contains("204"), "should mention status, got: ${text.content}")
             server.verify()
         }
     }
@@ -1552,6 +1567,229 @@ class OpenApiOperationToolTest {
                 val tree = Tool.formatToolTree("test", listOf(tool))
                 assertTrue(tree.isNotBlank())
             }
+        }
+    }
+
+    // ======================================================================
+    // Permissive query-param forwarding for GET/DELETE
+    // (regression: synthesized specs frequently miss query params; silently
+    // dropping them sends the model into a retry loop with no diagnostic.)
+    // ======================================================================
+
+    @Nested
+    inner class PermissiveQueryParams {
+
+        @Test
+        fun `GET with no declared params still forwards caller args`() {
+            // The open-meteo bug: synthesized spec has zero declared params,
+            // LLM passes latitude+longitude+hourly, request must include them.
+            val operation = Operation().apply {
+                operationId = "get_v1_forecast"
+                responses = io.swagger.v3.oas.models.responses.ApiResponses().apply {
+                    addApiResponse(
+                        "200",
+                        io.swagger.v3.oas.models.responses.ApiResponse().description("OK"),
+                    )
+                }
+            }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/v1/forecast",
+                operation = operation,
+                baseUrl = "https://api.open-meteo.com",
+            )
+            server.expect(requestTo(allOf(
+                containsString("https://api.open-meteo.com/v1/forecast"),
+                containsString("latitude=-33.7"),
+                containsString("longitude=150.3"),
+                containsString("hourly=temperature_2m"),
+            )))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""{"hourly":{"temperature_2m":[18.5]}}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call(
+                """{"latitude":-33.7,"longitude":150.3,"hourly":["temperature_2m"]}""",
+            )
+            assertInstanceOf(Tool.Result.Text::class.java, result)
+            server.verify()
+        }
+
+        @Test
+        fun `DELETE with no declared params still forwards caller args`() {
+            val operation = Operation().apply {
+                operationId = "delete_thing"
+                responses = io.swagger.v3.oas.models.responses.ApiResponses().apply {
+                    addApiResponse(
+                        "200",
+                        io.swagger.v3.oas.models.responses.ApiResponse().description("OK"),
+                    )
+                }
+            }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.DELETE,
+                path = "/thing",
+                operation = operation,
+            )
+            server.expect(requestTo(containsString("token=abc")))
+                .andExpect(method(HttpMethod.DELETE))
+                .andRespond(withSuccess("ok", MediaType.TEXT_PLAIN))
+
+            val result = tool.call("""{"token":"abc"}""")
+            assertInstanceOf(Tool.Result.Text::class.java, result)
+            server.verify()
+        }
+
+        @Test
+        fun `GET array params forward as repeated query keys`() {
+            val operation = Operation().apply { operationId = "list" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/list",
+                operation = operation,
+            )
+            server.expect(requestTo(allOf(
+                containsString("tag=a"),
+                containsString("tag=b"),
+                containsString("tag=c"),
+            )))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"tag":["a","b","c"]}""")
+            server.verify()
+        }
+
+        @Test
+        fun `GET path param is consumed and not duplicated as query`() {
+            val operation = Operation().apply {
+                operationId = "get_thing"
+                addParametersItem(
+                    Parameter().apply {
+                        name = "id"
+                        `in` = "path"
+                        required = true
+                        schema = StringSchema()
+                    },
+                )
+            }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/things/{id}",
+                operation = operation,
+            )
+            server.expect(requestTo("https://api.example.com/things/42?extra=foo"))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"id":"42","extra":"foo"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST does not forward undeclared keys as query`() {
+            // Permissive forwarding only kicks in for GET/DELETE — POST/PUT/PATCH
+            // have a request body and undeclared keys are unsafe to coerce.
+            val operation = Operation().apply {
+                operationId = "create_thing"
+                requestBody = RequestBody().apply {
+                    content = io.swagger.v3.oas.models.media.Content().addMediaType(
+                        "application/json",
+                        io.swagger.v3.oas.models.media.MediaType().schema(
+                            io.swagger.v3.oas.models.media.ObjectSchema().apply {
+                                properties = mapOf("name" to StringSchema())
+                            },
+                        ),
+                    )
+                }
+            }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.POST,
+                path = "/things",
+                operation = operation,
+            )
+            server.expect(requestTo("https://api.example.com/things"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess("""{"id":1}""", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"name":"foo"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `null-valued args are not forwarded`() {
+            val operation = Operation().apply { operationId = "list" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/list",
+                operation = operation,
+            )
+            server.expect(requestTo("https://api.example.com/list?keep=yes"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"keep":"yes","drop":null}""")
+            server.verify()
+        }
+    }
+
+    // ======================================================================
+    // Empty 200 body produces a useful error
+    // (regression: empty Tool.Result.Text caused the model to loop because
+    // it saw "" as the result with no signal that something was wrong.)
+    // ======================================================================
+
+    @Nested
+    inner class EmptyResponseBodyHandling {
+
+        @Test
+        fun `empty 200 body returns error not empty text`() {
+            // Real-world case: open-meteo returns 200 with empty body when
+            // required query params are missing.
+            val operation = Operation().apply { operationId = "get_v1_forecast" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/v1/forecast",
+                operation = operation,
+                baseUrl = "https://api.open-meteo.com",
+            )
+            server.expect(requestTo(containsString("https://api.open-meteo.com/v1/forecast")))
+                .andRespond(withSuccess("", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("{}")
+            val error = assertInstanceOf(Tool.Result.Error::class.java, result)
+            assertTrue(
+                error.message.contains("Empty response body", ignoreCase = true),
+                "got: ${error.message}",
+            )
+            assertTrue(error.message.contains("/v1/forecast"), "should mention path, got: ${error.message}")
+        }
+
+        @Test
+        fun `whitespace-only 200 body returns error`() {
+            val operation = Operation().apply { operationId = "list" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/list",
+                operation = operation,
+            )
+            server.expect(requestTo(containsString("/list")))
+                .andRespond(withSuccess("   \n\t  \n", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("{}")
+            assertInstanceOf(Tool.Result.Error::class.java, result)
+        }
+
+        @Test
+        fun `non-empty 200 body returns text result`() {
+            val operation = Operation().apply { operationId = "list" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/list",
+                operation = operation,
+            )
+            server.expect(requestTo(containsString("/list")))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("{}")
+            val text = assertInstanceOf(Tool.Result.Text::class.java, result)
+            assertTrue(text.content.contains("ok"))
         }
     }
 
