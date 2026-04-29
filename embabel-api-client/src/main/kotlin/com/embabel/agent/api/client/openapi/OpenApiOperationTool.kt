@@ -55,6 +55,8 @@ class OpenApiOperationTool(
     }
 
     override fun call(input: String): Tool.Result {
+        val started = System.currentTimeMillis()
+        var uriForLog: String? = null
         return try {
             @Suppress("UNCHECKED_CAST")
             val params: Map<String, Any?> = if (input.isBlank()) {
@@ -68,18 +70,25 @@ class OpenApiOperationTool(
             val body = resolveBody(params)
 
             val uri = buildUri(resolvedPath, queryParams)
+            uriForLog = uri
 
             logger.info("Calling {} {} (baseUrl={})", httpMethod, uri, baseUrl)
 
             val response = executeRequest(uri, body)
+            logger.info("Completed {} {} in {}ms", httpMethod, uri, System.currentTimeMillis() - started)
             Tool.Result.text(response ?: "")
         } catch (e: RestClientResponseException) {
             val errorBody = e.responseBodyAsString
-            val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path: ${errorBody.take(200)}"
+            val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path after ${System.currentTimeMillis() - started}ms: ${errorBody.take(200)}"
             logger.warn(message)
             Tool.Result.error(message, e)
         } catch (e: Exception) {
-            logger.warn("Error calling {} {} at {}: {}", httpMethod, path, baseUrl, e.message)
+            logger.warn(
+                "Error calling {} {} at {} after {}ms: {} ({})",
+                httpMethod, uriForLog ?: path, baseUrl,
+                System.currentTimeMillis() - started,
+                e.javaClass.simpleName, e.message,
+            )
             Tool.Result.error("Error calling $httpMethod $path at $baseUrl: ${e.message}", e)
         }
     }

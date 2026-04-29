@@ -46,7 +46,9 @@ import org.springframework.web.client.RestClient
  * // petstore is a ProgressiveTool — hand it directly to an agent
  * ```
  */
-class OpenApiLearner : ApiLearner {
+class OpenApiLearner(
+    private val clientProperties: OpenApiClientProperties = OpenApiClientProperties(),
+) : ApiLearner {
 
     override fun learn(source: String): LearnedApi {
         val rawSpec = fetchRawSpec(source)
@@ -62,7 +64,7 @@ class OpenApiLearner : ApiLearner {
             description = description,
             authRequirements = authRequirements,
             spec = spec,
-            factory = { credentials -> buildTool(source, openApi, credentials) },
+            factory = { credentials -> buildTool(source, openApi, credentials, clientProperties = clientProperties) },
         )
     }
 
@@ -158,6 +160,7 @@ class OpenApiLearner : ApiLearner {
             tags: Set<String>? = null,
             operationIds: Set<String>? = null,
             nameOverride: String? = null,
+            clientProperties: OpenApiClientProperties = OpenApiClientProperties(),
         ): ProgressiveTool {
             val model = buildModel(source, openApi)
             val tagFiltered = if (tags != null) model.filterByTags(tags) else model
@@ -182,7 +185,7 @@ class OpenApiLearner : ApiLearner {
                 }
             }
 
-            val restClient = buildRestClient(openApi, credentials)
+            val restClient = buildRestClient(openApi, credentials, clientProperties)
             val allTools = materializeTools(openApi, filtered.baseUrl, restClient)
 
             // Use the model's resource grouping (respects tag filtering)
@@ -227,11 +230,15 @@ class OpenApiLearner : ApiLearner {
         private fun buildRestClient(
             openApi: OpenAPI,
             credentials: ApiCredentials,
+            clientProperties: OpenApiClientProperties,
         ): RestClient {
             val httpClient = java.net.http.HttpClient.newBuilder()
                 .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+                .connectTimeout(clientProperties.connectTimeout)
                 .build()
-            val requestFactory = org.springframework.http.client.JdkClientHttpRequestFactory(httpClient)
+            val requestFactory = org.springframework.http.client.JdkClientHttpRequestFactory(httpClient).apply {
+                setReadTimeout(clientProperties.readTimeout)
+            }
             val builder = RestClient.builder().requestFactory(requestFactory)
             applyCredentials(builder, openApi, credentials)
             return builder.build()
