@@ -59,6 +59,13 @@ interface SandboxSessionManager : AutoCloseable {
      * @param config sandbox configuration (image, resources, env)
      * @param owner optional owner identifier (user or agent)
      * @param ttl time-to-live — session is evicted after this idle duration
+     * @param metadata free-form key/value tags. Stored on [SandboxSession.metadata]
+     *   AND mirrored to the underlying executor (e.g. docker `--label k=v`) so
+     *   tool-side queries (`docker ps --filter label=k=v`) and Kotlin-side
+     *   filtering both work. Semantics belong to the caller — common uses:
+     *   identify the JVM that owns the session for shutdown cleanup; tag the
+     *   logical request the session is serving for diagnostics; group sessions
+     *   by tenant for batch operations.
      * @return the created session in [SandboxSession.SessionState.ACTIVE] state
      */
     fun create(
@@ -66,6 +73,7 @@ interface SandboxSessionManager : AutoCloseable {
         config: SandboxConfig,
         owner: String? = null,
         ttl: Duration = 1.hours,
+        metadata: Map<String, String> = emptyMap(),
     ): SandboxSession
 
     /**

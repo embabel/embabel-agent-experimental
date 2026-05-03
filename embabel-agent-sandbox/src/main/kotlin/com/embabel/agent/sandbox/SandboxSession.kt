@@ -74,6 +74,16 @@ interface SandboxSession : AutoCloseable {
     val config: SandboxConfig
 
     /**
+     * Free-form key/value tags supplied at create-time. The implementation
+     * mirrors these to the underlying executor (e.g. docker `--label k=v`)
+     * so they're queryable via the executor's CLI as well as the Kotlin
+     * object. Semantics belong to the caller — see
+     * [SandboxSessionManager.create] for typical uses.
+     */
+    val metadata: Map<String, String>
+        get() = emptyMap()
+
+    /**
      * Execute a command in this session's persistent environment.
      * The environment retains all state from prior executions.
      *

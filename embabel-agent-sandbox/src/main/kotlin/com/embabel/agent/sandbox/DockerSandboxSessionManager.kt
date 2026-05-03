@@ -47,6 +47,7 @@ class DockerSandboxSessionManager @JvmOverloads constructor(
         config: SandboxConfig,
         owner: String?,
         ttl: Duration,
+        metadata: Map<String, String>,
     ): SandboxSession {
         // Enforce limits
         if (maxTotalSessions > 0 && sessions.size >= maxTotalSessions) {
@@ -72,6 +73,7 @@ class DockerSandboxSessionManager @JvmOverloads constructor(
             config = config,
             owner = owner,
             ttl = ttl,
+            metadata = metadata,
         )
 
         sessions[session.id] = session

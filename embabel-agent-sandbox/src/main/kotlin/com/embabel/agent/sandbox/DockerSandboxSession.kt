@@ -41,6 +41,7 @@ class DockerSandboxSession(
     override val config: SandboxConfig,
     override val owner: String? = null,
     val ttl: Duration,
+    override val metadata: Map<String, String> = emptyMap(),
 ) : SandboxSession {
 
     private val logger = LoggerFactory.getLogger(DockerSandboxSession::class.java)
@@ -80,6 +81,18 @@ class DockerSandboxSession(
             "docker", "run", "-d",
             "--name", containerName,
         )
+
+        // Mirror caller-supplied metadata to docker --label so it's queryable
+        // via `docker ps --filter label=k=v`. Semantics live with the caller
+        // — typical uses include per-JVM ownership tagging, request id for
+        // diagnostics, tenant grouping. Validate keys early to surface
+        // mistakes on the Kotlin side rather than as cryptic docker errors.
+        for ((k, v) in metadata) {
+            require(k.isNotBlank() && !k.contains('=') && !k.contains(' ')) {
+                "Invalid metadata key '$k' — must be non-blank, no '=' or whitespace"
+            }
+            cmd.addAll(listOf("--label", "$k=$v"))
+        }
 
         config.memory.let { cmd.addAll(listOf("--memory", it)) }
         config.cpus.let { cmd.addAll(listOf("--cpus", it)) }
