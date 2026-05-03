@@ -20,6 +20,7 @@ import com.embabel.agent.api.tool.callback.AfterToolResultContext;
 import com.embabel.agent.api.tool.callback.BeforeLlmCallContext;
 import com.embabel.agent.api.tool.callback.ToolLoopInspector;
 import com.embabel.agent.api.tool.loop.testing.AbstractToolLoopTest;
+import com.embabel.agent.spi.loop.ExitOnEmptyPolicy;
 import com.embabel.agent.spi.loop.ImmediateThrowPolicy;
 import com.embabel.agent.spi.loop.ToolInjectionStrategy;
 import com.embabel.agent.spi.loop.support.DefaultToolLoop;
@@ -90,7 +91,7 @@ class LangChainToolLoopIT extends AbstractToolLoopTest {
 
         // Create the tool loop with LangChain4j backend
         var toolLoop = new DefaultToolLoop(
-            messageSender,
+             messageSender,
             new ObjectMapper(),
             ToolInjectionStrategy.Companion.getNONE(),  // no injection strategy
             20,    // max iterations
@@ -99,7 +100,8 @@ class LangChainToolLoopIT extends AbstractToolLoopTest {
             List.of(truncatingTransformer, slidingWindowTransformer),
             List.of(),  // toolCallInspectors (empty for non-streaming)
             ToolCallContext.EMPTY,
-            ImmediateThrowPolicy.INSTANCE
+            ImmediateThrowPolicy.INSTANCE,
+            ExitOnEmptyPolicy.INSTANCE
         );
 
         var toolNames = tools.stream()

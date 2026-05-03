@@ -20,6 +20,8 @@ import com.embabel.agent.api.tool.callback.AfterToolResultContext;
 import com.embabel.agent.api.tool.callback.BeforeLlmCallContext;
 import com.embabel.agent.api.tool.callback.ToolLoopInspector;
 import com.embabel.agent.api.tool.loop.testing.AbstractToolLoopTest;
+import com.embabel.agent.spi.loop.EmptyResponsePolicy;
+import com.embabel.agent.spi.loop.ExitOnEmptyPolicy;
 import com.embabel.agent.spi.loop.ImmediateThrowPolicy;
 import com.embabel.agent.spi.loop.ToolInjectionStrategy;
 import com.embabel.agent.spi.loop.support.DefaultToolLoop;
@@ -100,7 +102,8 @@ class OpenAiToolLoopIT extends AbstractToolLoopTest {
             List.of(truncatingTransformer, slidingWindowTransformer),
             List.of(),  // toolCallInspectors (empty for non-streaming)
             ToolCallContext.EMPTY,
-            ImmediateThrowPolicy.INSTANCE
+            ImmediateThrowPolicy.INSTANCE,
+                ExitOnEmptyPolicy.INSTANCE
         );
 
         var toolNames = tools.stream()
