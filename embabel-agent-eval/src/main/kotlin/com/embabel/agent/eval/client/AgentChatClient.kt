@@ -72,9 +72,6 @@ class AgentChatClient(
     }
 
     fun createSession(sessionCreationRequest: SessionCreationRequest): SessionCreationResponse {
-
-        print("Trigger Build and Autodeploy Test")
-        
         return restClient
             .put()
             .uri("${agentHost}/${agentChatPath}/sessions")
