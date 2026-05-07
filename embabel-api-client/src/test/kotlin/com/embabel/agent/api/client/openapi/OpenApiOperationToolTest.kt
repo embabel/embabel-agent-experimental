@@ -33,6 +33,7 @@ import org.springframework.http.MediaType
 import org.springframework.test.web.client.MockRestServiceServer
 import org.springframework.test.web.client.match.MockRestRequestMatchers.*
 import org.springframework.test.web.client.response.MockRestResponseCreators.*
+import org.springframework.util.LinkedMultiValueMap
 import org.springframework.web.client.RestClient
 
 class OpenApiOperationToolTest {
@@ -1142,6 +1143,205 @@ class OpenApiOperationToolTest {
             val text = assertInstanceOf(Tool.Result.Text::class.java, result)
             assertTrue(text.content.isNotBlank(), "must be non-empty, got: '${text.content}'")
             assertTrue(text.content.contains("204"), "should mention status, got: ${text.content}")
+            server.verify()
+        }
+
+        // --- Form-encoded request bodies (Stripe and friends) ---
+        //
+        // Stripe's API only accepts `application/x-www-form-urlencoded`
+        // and explicitly rejects JSON. When a spec declares ONLY
+        // form-urlencoded for an op's request body, the tool encodes the
+        // params as form pairs using Rails / Stripe bracket syntax for
+        // nested objects and arrays.
+
+        @Test
+        fun `POST with form-urlencoded body — flat params`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/v1/customers",
+                operation = Operation().apply {
+                    operationId = "customersCreate"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply {
+                                        addProperty("email", StringSchema())
+                                        addProperty("name", StringSchema())
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v1/customers"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_FORM_URLENCODED))
+                .andExpect(content().formData(LinkedMultiValueMap<String, String>().apply {
+                    add("email", "alice@acme.com")
+                    add("name", "Alice")
+                }))
+                .andRespond(withSuccess("""{"id": "cus_1"}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"email": "alice@acme.com", "name": "Alice"}""")
+            assertIsText(result, """{"id": "cus_1"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST with form-urlencoded body — nested object uses bracket syntax`() {
+            // Stripe's `metadata` field is a nested object; the wire form
+            // is `metadata[order_id]=ord_1&metadata[source]=cli`.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/v1/customers",
+                operation = Operation().apply {
+                    operationId = "customersCreate"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply {
+                                        addProperty("email", StringSchema())
+                                        addProperty("metadata", ObjectSchema())
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v1/customers"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_FORM_URLENCODED))
+                .andExpect(content().formData(LinkedMultiValueMap<String, String>().apply {
+                    add("email", "alice@acme.com")
+                    add("metadata[order_id]", "ord_1")
+                    add("metadata[source]", "cli")
+                }))
+                .andRespond(withSuccess("""{"id": "cus_1"}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call(
+                """{"email": "alice@acme.com", "metadata": {"order_id": "ord_1", "source": "cli"}}""",
+            )
+            assertIsText(result, """{"id": "cus_1"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST with form-urlencoded body — list of objects uses indexed brackets`() {
+            // Stripe's `line_items` and `items` use `items[0][price]=p_1`
+            // syntax. Verify list-of-map flattening.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/v1/payment_links",
+                operation = Operation().apply {
+                    operationId = "paymentLinksCreate"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply {
+                                        addProperty("line_items", ArraySchema())
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v1/payment_links"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_FORM_URLENCODED))
+                .andExpect(content().formData(LinkedMultiValueMap<String, String>().apply {
+                    add("line_items[0][price]", "price_1")
+                    add("line_items[0][quantity]", "2")
+                    add("line_items[1][price]", "price_2")
+                    add("line_items[1][quantity]", "1")
+                }))
+                .andRespond(withSuccess("""{"id": "plink_1"}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call(
+                """{"line_items": [{"price": "price_1", "quantity": 2}, {"price": "price_2", "quantity": 1}]}""",
+            )
+            assertIsText(result, """{"id": "plink_1"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST with form-urlencoded body — booleans render as true-false strings, nulls dropped`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/v1/refunds",
+                operation = Operation().apply {
+                    operationId = "refundsCreate"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply {
+                                        addProperty("charge", StringSchema())
+                                        addProperty("refund_application_fee", BooleanSchema())
+                                        addProperty("reason", StringSchema())
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v1/refunds"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_FORM_URLENCODED))
+                .andExpect(content().formData(LinkedMultiValueMap<String, String>().apply {
+                    add("charge", "ch_1")
+                    add("refund_application_fee", "true")
+                }))
+                .andRespond(withSuccess("""{"id": "re_1"}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call(
+                """{"charge": "ch_1", "refund_application_fee": true, "reason": null}""",
+            )
+            assertIsText(result, """{"id": "re_1"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST falls back to JSON when both JSON and form are declared`() {
+            // Conservative behaviour: if a spec lists both JSON and form
+            // for the same op, JSON wins so we don't break any existing
+            // pack that happened to include both content types.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/dual",
+                operation = Operation().apply {
+                    operationId = "dual"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply { addProperty("a", StringSchema()) }
+                                },
+                            )
+                            addMediaType(
+                                "application/json",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply { addProperty("a", StringSchema()) }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/dual"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(content().json("""{"a": "x"}"""))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"a": "x"}""")
+            assertIsText(result, "{}")
             server.verify()
         }
     }

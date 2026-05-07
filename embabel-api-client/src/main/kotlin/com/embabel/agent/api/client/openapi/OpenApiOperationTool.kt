@@ -27,6 +27,8 @@ import io.swagger.v3.oas.models.parameters.Parameter
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
+import org.springframework.util.LinkedMultiValueMap
+import org.springframework.util.MultiValueMap
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientResponseException
 import org.springframework.web.util.UriComponentsBuilder
@@ -302,10 +304,53 @@ class OpenApiOperationTool(
         body: Any?,
     ): ResponseEntity<String> {
         if (body != null) {
-            spec.contentType(MediaType.APPLICATION_JSON)
-                .body(objectMapper.writeValueAsString(body))
+            if (preferFormUrlEncoded()) {
+                spec.contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(toFormBody(body))
+            } else {
+                spec.contentType(MediaType.APPLICATION_JSON)
+                    .body(objectMapper.writeValueAsString(body))
+            }
         }
         return spec.retrieve().toEntity(String::class.java)
+    }
+
+    // True when the operation's requestBody declares
+    // `application/x-www-form-urlencoded` AND not `application/json`.
+    // Conservative on purpose — JSON wins when a spec lists both, so
+    // every existing pack keeps its current wire format.
+    private fun preferFormUrlEncoded(): Boolean {
+        val content = operation.requestBody?.content ?: return false
+        val keys = content.keys
+        if (keys.any { it.equals(MediaType.APPLICATION_JSON_VALUE, ignoreCase = true) }) return false
+        return keys.any { it.equals(MediaType.APPLICATION_FORM_URLENCODED_VALUE, ignoreCase = true) }
+    }
+
+    // Flatten an arbitrary body graph into a `MultiValueMap<String,String>`
+    // using Stripe / Rails bracket syntax: `metadata[key]=v`, `items[0][price]=p`.
+    // Booleans render `true`/`false`; nulls are dropped (Stripe treats a
+    // missing key as "leave unchanged"). Non-map/list scalars at the root
+    // are coerced to a single `body=<toString>` pair as a last resort —
+    // shouldn't happen for any reasonable form-encoded spec.
+    private fun toFormBody(body: Any): MultiValueMap<String, String> {
+        val out = LinkedMultiValueMap<String, String>()
+        when (body) {
+            is Map<*, *> -> body.forEach { (k, v) -> appendFormPair(out, k.toString(), v) }
+            is Collection<*> -> body.forEachIndexed { i, v -> appendFormPair(out, "[$i]", v) }
+            else -> out.add("body", body.toString())
+        }
+        return out
+    }
+
+    private fun appendFormPair(out: MultiValueMap<String, String>, key: String, value: Any?) {
+        when (value) {
+            null -> Unit
+            is Map<*, *> -> value.forEach { (k, v) -> appendFormPair(out, "$key[${k}]", v) }
+            is Collection<*> -> value.forEachIndexed { i, v -> appendFormPair(out, "$key[$i]", v) }
+            is Boolean -> out.add(key, value.toString())
+            is Number -> out.add(key, value.toString())
+            else -> out.add(key, value.toString())
+        }
     }
 
     companion object {
