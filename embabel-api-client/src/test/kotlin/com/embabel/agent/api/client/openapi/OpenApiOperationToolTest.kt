@@ -481,7 +481,7 @@ class OpenApiOperationToolTest {
                 this.schema = schema
             }
             val op = Operation().apply { parameters = listOf(param) }
-            val inputSchema = OpenApiOperationTool.buildInputSchema(op)
+            val inputSchema = OpenApiOperationTool.buildInputSchema(op, emptyMap())
             val idsParam = inputSchema.parameters.find { it.name == "ids" }!!
             assertEquals(Tool.ParameterType.ARRAY, idsParam.type)
             assertEquals(Tool.ParameterType.STRING, idsParam.itemType, "Should default to STRING")
@@ -498,7 +498,7 @@ class OpenApiOperationToolTest {
                 this.schema = schema
             }
             val op = Operation().apply { parameters = listOf(param) }
-            val inputSchema = OpenApiOperationTool.buildInputSchema(op)
+            val inputSchema = OpenApiOperationTool.buildInputSchema(op, emptyMap())
             val idsParam = inputSchema.parameters.find { it.name == "ids" }!!
             assertEquals(Tool.ParameterType.ARRAY, idsParam.type)
             assertEquals(Tool.ParameterType.INTEGER, idsParam.itemType)

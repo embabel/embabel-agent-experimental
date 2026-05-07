@@ -22,6 +22,9 @@ import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.agent.api.tool.progressive.UnfoldingTool
 import io.swagger.v3.oas.models.OpenAPI
+import io.swagger.v3.oas.models.Operation
+import io.swagger.v3.oas.models.PathItem
+import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.security.SecurityScheme
 import io.swagger.parser.OpenAPIParser
 import io.swagger.v3.parser.core.models.ParseOptions
@@ -99,21 +102,48 @@ class OpenApiLearner(
         /**
          * Parse an OpenAPI spec from raw content. If [rawContent] is provided,
          * parses from the string directly; otherwise fetches from [source].
+         *
+         * Returns a fully-resolved [OpenAPI] — internal `$ref` nodes are
+         * inlined into their referenced schema bodies. This is the form the
+         * runtime tool path ([OpenApiOperationTool]) expects: it walks
+         * `operation.requestBody.content.schema.properties` directly and
+         * needs the full inline structure to build [Tool.InputSchema] and
+         * the JSON-string output schema.
+         *
+         * For ref-preserving consumers (the IR, the data dictionary), use
+         * [parseSpecPreservingRefs] — that variant keeps `$ref` nodes intact
+         * so downstream can emit named-type references instead of inlining.
          */
-        fun parseSpec(source: String, rawContent: String? = null): OpenAPI {
+        fun parseSpec(source: String, rawContent: String? = null): OpenAPI =
+            parseInternal(source, rawContent, resolveFully = true)
+
+        /**
+         * Parse an OpenAPI spec while preserving internal `$ref` nodes.
+         *
+         * The Swagger parser leaves `$ref: "#/components/schemas/Foo"` as a
+         * bare node whose `.type` and `.properties` are null, with the
+         * original `$ref` string still on the schema. Used by
+         * [LearnedApiSpec.OpenApi.toModel] so the IR can emit
+         * [com.embabel.agent.api.client.model.ApiSchema.Ref] entries that
+         * survive into the [com.embabel.agent.core.DataDictionary] as
+         * cross-type links.
+         *
+         * `components.schemas` is preserved in the resulting [OpenAPI]
+         * either way; this variant additionally preserves the ref nodes
+         * inside operation request/response bodies and inside other
+         * components' property schemas.
+         */
+        fun parseSpecPreservingRefs(source: String, rawContent: String? = null): OpenAPI =
+            parseInternal(source, rawContent, resolveFully = false)
+
+        private fun parseInternal(
+            source: String,
+            rawContent: String?,
+            resolveFully: Boolean,
+        ): OpenAPI {
             val parseOptions = ParseOptions().apply {
-                // `isResolve` alone resolves only EXTERNAL $refs. Internal
-                // component refs (`$ref: "#/components/schemas/Issue"`) stay
-                // as bare ref nodes whose `.type` and `.properties` are null,
-                // so downstream type-extraction sees `{type: "object"}` with
-                // no fields and emits `Record<string, unknown>` in the
-                // generated TypeScript surface — wiping out the type info
-                // we just learned. `isResolveFully` inlines internal refs so
-                // schemas carry their actual structure. Cost: response
-                // schemas get larger (no shared named types). Acceptable
-                // trade for now; named-type extraction is a separate fix.
                 isResolve = true
-                isResolveFully = true
+                isResolveFully = resolveFully
                 isResolveCombinators = true
             }
             val result = if (rawContent != null) {
@@ -186,10 +216,14 @@ class OpenApiLearner(
             }
 
             val restClient = buildRestClient(openApi, credentials, clientProperties)
-            val allTools = materializeTools(openApi, filtered.baseUrl, restClient)
-
             // Use the model's resource grouping (respects tag filtering)
             val includedNames = filtered.allOperations.map { it.name }.toSet()
+            // Pre-computing the curated name set lets `materializeTools`
+            // scope the per-source named-types JSON to types reachable
+            // from these operations only — uncurated ops' types get
+            // dropped from the registry, which for big specs (Sheets,
+            // Docs, GitHub) cuts the JSON the LLM has to load by ~95%.
+            val allTools = materializeTools(openApi, filtered.baseUrl, restClient, includedNames)
             val includedTools = allTools.filterKeys { it in includedNames }
 
             val toolsByResource = filtered.resources.associate { resource ->
@@ -389,9 +423,24 @@ class OpenApiLearner(
             openApi: OpenAPI,
             baseUrl: String,
             restClient: RestClient,
+            curatedOperationNames: Set<String>,
         ): Map<String, Tool> {
             val tools = mutableMapOf<String, Tool>()
+            // Snapshot the named-types registry once so each operation's
+            // `$ref` deref / output-schema serialization sees the same
+            // map. `components.schemas` is preserved by both
+            // `parseSpec` (resolved) and `parseSpecPreservingRefs` (refs
+            // intact), so this works in either parse mode.
+            @Suppress("UNCHECKED_CAST")
+            val componentsSchemas: Map<String, Schema<*>> =
+                (openApi.components?.schemas as? Map<String, Schema<*>>) ?: emptyMap()
 
+            // First pass: build the curated Operation set. We need to
+            // know the Swagger-level operation objects (not just names)
+            // to feed the named-types reachability walk. Done as a
+            // single pre-pass to avoid duplicating the path-walk logic.
+            val curatedOps = mutableListOf<Operation>()
+            val mergedByName = mutableMapOf<String, OperationLocation>()
             openApi.paths?.forEach { (path, pathItem) ->
                 pathItem.readOperationsMap()?.forEach { (method, operation) ->
                     val mergedOperation = operation.apply {
@@ -400,20 +449,40 @@ class OpenApiLearner(
                         val existingNames = opParams.map { it.name }.toSet()
                         parameters = opParams + pathParams.filter { it.name !in existingNames }
                     }
-
-                    val tool = OpenApiOperationTool(
-                        baseUrl = baseUrl,
-                        path = path,
-                        httpMethod = method,
-                        operation = mergedOperation,
-                        restClient = restClient,
-                    )
-                    tools[tool.definition.name] = tool
+                    val name = OpenApiOperationTool.operationName(method, path, mergedOperation)
+                    mergedByName[name] = OperationLocation(path, method, mergedOperation)
+                    if (name in curatedOperationNames) curatedOps.add(mergedOperation)
                 }
+            }
+
+            // Compute the per-source named-types JSON ONCE, scoped to
+            // types reachable from curated ops, and share the resulting
+            // String by reference across every sibling tool. Each
+            // `Tool.Definition.metadata[NAMED_TYPES_KEY]` then points at
+            // the same trimmed JSON instead of one independent copy.
+            val namedTypesJson = OpenApiOperationTool.namedTypesAsJson(componentsSchemas, curatedOps)
+
+            for ((name, location) in mergedByName) {
+                val tool = OpenApiOperationTool(
+                    baseUrl = baseUrl,
+                    path = location.path,
+                    httpMethod = location.method,
+                    operation = location.operation,
+                    restClient = restClient,
+                    componentsSchemas = componentsSchemas,
+                    namedTypesJson = namedTypesJson,
+                )
+                tools[tool.definition.name] = tool
             }
 
             return tools
         }
+
+        private data class OperationLocation(
+            val path: String,
+            val method: PathItem.HttpMethod,
+            val operation: Operation,
+        )
 
         private fun groupByTag(
             openApi: OpenAPI,

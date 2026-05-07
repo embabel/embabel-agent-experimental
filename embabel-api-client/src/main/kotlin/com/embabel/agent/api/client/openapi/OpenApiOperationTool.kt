@@ -44,15 +44,41 @@ class OpenApiOperationTool(
     private val operation: Operation,
     private val restClient: RestClient,
     private val objectMapper: ObjectMapper = jacksonObjectMapper(),
+    // Map of named OpenAPI component schemas (`#/components/schemas/*`)
+    // keyed by name. Used to follow `$ref` nodes when the spec was parsed
+    // via OpenApiLearner.parseSpecPreservingRefs (the default for the
+    // tool path since v8 of the schema-emission pipeline). Empty when the
+    // spec was parsed fully-resolved or has no component schemas — the
+    // tool then walks the inline structure as before.
+    private val componentsSchemas: Map<String, Schema<*>> = emptyMap(),
+    // Pre-serialised per-source named-types JSON, supplied by
+    // [OpenApiLearner.materializeTools] so every sibling tool from the
+    // same spec shares the same String reference rather than each
+    // re-serialising the registry in its constructor — that re-
+    // serialisation cost was O(operations × component-graph-size), which
+    // for Google's specs meant ~1.8 MB of identical JSON per source
+    // sitting in `Tool.Definition.metadata`. With this in place the
+    // duplicated copies collapse to one.
+    private val namedTypesJson: String? = null,
 ) : Tool {
 
     override val definition: Tool.Definition = Tool.Definition(
         name = operationName(httpMethod, path, operation),
         description = operationDescription(operation),
-        inputSchema = buildInputSchema(operation),
+        inputSchema = buildInputSchema(operation, componentsSchemas),
     ).let { def ->
-        val outputSchema = extractOutputSchema(operation)
-        if (outputSchema != null) def.withMetadata(OUTPUT_SCHEMA_KEY, outputSchema) else def
+        var withMeta = def
+        extractOutputSchema(operation, componentsSchemas)?.let {
+            withMeta = withMeta.withMetadata(OUTPUT_SCHEMA_KEY, it)
+        }
+        // Per-source named-types JSON pre-computed by `materializeTools`
+        // and shared by reference across every sibling tool (one
+        // serialisation per spec instead of one per operation). See
+        // `[namedTypesJson]` for context.
+        namedTypesJson?.let {
+            withMeta = withMeta.withMetadata(NAMED_TYPES_KEY, it)
+        }
+        withMeta
     }
 
     override fun call(input: String): Tool.Result {
@@ -158,7 +184,13 @@ class OpenApiOperationTool(
         val bodyPropNames: Set<String> = if (isReadOnly) {
             emptySet()
         } else {
+            // Body schema may be a bare `$ref` node when the spec was
+            // parsed via [OpenApiLearner.parseSpecPreservingRefs]; deref
+            // before reading `.properties` to recover the target type's
+            // declared body fields. Without this the request would forward
+            // those fields as query params, which most APIs reject.
             operation.requestBody?.content?.values?.firstOrNull()?.schema
+                ?.deref(componentsSchemas)
                 ?.properties?.keys?.toSet().orEmpty()
         }
 
@@ -203,7 +235,10 @@ class OpenApiOperationTool(
      * `issues/create-comment`, `pulls/create`).
      */
     private fun resolveBody(params: Map<String, Any?>): Any? {
+        // Same deref reasoning as `resolveQueryParams`: the body schema
+        // may arrive as a bare ref under the ref-preserving parse.
         val bodySchema = operation.requestBody?.content?.values?.firstOrNull()?.schema
+            ?.deref(componentsSchemas)
             ?: return null
 
         val bodyProps = bodySchema.properties?.keys?.toSet().orEmpty()
@@ -282,14 +317,106 @@ class OpenApiOperationTool(
          */
         const val OUTPUT_SCHEMA_KEY: String = "outputSchema"
 
+        // Metadata key for the per-source named-types JSON Schema map.
+        //
+        // Value is a JSON string mapping each TypeName to its JSON Schema —
+        // one entry per `#/components/schemas/*` in the source spec, with
+        // inter-type references kept as JSON Schema $ref pointers (into a
+        // `#/$defs/X` namespace) rather than inlined so the graph stays
+        // compact. Same string value on every tool from the same source;
+        // downstream surface generators (e.g. JavaScriptCodeSurfaceBuilder)
+        // read it once and emit one `interface TypeName { ... }` per entry.
+        const val NAMED_TYPES_KEY: String = "namedTypes"
+
         private val logger = LoggerFactory.getLogger(OpenApiOperationTool::class.java)
 
+        // Serialize the named-types registry (`components/schemas`) reachable
+        // from [entryPointOperations] into a single JSON object mapping
+        // TypeName to JSON Schema, suitable for shipping on
+        // `Tool.Definition.metadata[NAMED_TYPES_KEY]`. Refs between named
+        // types are preserved as JSON Schema $ref pointers (into a
+        // `#/$defs/X` namespace) rather than inlined.
+        //
+        // Reachability is computed from [entryPointOperations]'s
+        // request/response/parameter schemas, following $refs transitively.
+        // Types not reachable from a curated operation are dropped — for a
+        // pack like Sheets that exposes 9 of 17 operations, this strips
+        // hundreds of unreferenced sub-types from the JSON the LLM has to
+        // load.
+        //
+        // Returns `null` when the spec has no component schemas (or when
+        // none are reachable from the entry points), so the metadata key
+        // is simply absent.
+        internal fun namedTypesAsJson(
+            componentsSchemas: Map<String, Schema<*>>,
+            entryPointOperations: Iterable<Operation>,
+        ): String? {
+            if (componentsSchemas.isEmpty()) return null
+            val reachable = computeReachableTypeNames(componentsSchemas, entryPointOperations)
+            if (reachable.isEmpty()) return null
+            return try {
+                val mapped = reachable.associateWith { name ->
+                    schemaToMap(componentsSchemas.getValue(name), componentsSchemas)
+                }
+                jacksonObjectMapper().writeValueAsString(mapped)
+            } catch (_: Exception) {
+                null
+            }
+        }
+
         /**
-         * Extract the JSON Schema of the success response (first 2xx with
-         * a JSON content schema) from an OpenAPI operation. Returns the
-         * schema as a JSON string, or `null` if unavailable.
+         * Walk every schema reachable from [entryPointOperations]'s
+         * parameters / request bodies / responses, following `$ref`s
+         * transitively into [componentsSchemas]. Returns the set of named
+         * types actually used by the curated operation surface — the
+         * inverse "everything in the spec" wastes context on schemas no
+         * curated method ever returns or accepts.
          */
-        private fun extractOutputSchema(operation: Operation): String? {
+        private fun computeReachableTypeNames(
+            componentsSchemas: Map<String, Schema<*>>,
+            entryPointOperations: Iterable<Operation>,
+        ): Set<String> {
+            val frontier = ArrayDeque<Schema<*>>()
+            for (op in entryPointOperations) {
+                op.parameters?.forEach { it.schema?.let(frontier::add) }
+                op.requestBody?.content?.values?.forEach { it.schema?.let(frontier::add) }
+                op.responses?.values?.forEach { resp ->
+                    resp.content?.values?.forEach { it.schema?.let(frontier::add) }
+                }
+            }
+            val seen = LinkedHashSet<String>()
+            while (frontier.isNotEmpty()) {
+                val schema = frontier.removeFirst()
+                schema.`$ref`?.let { ref ->
+                    val name = extractRefName(ref)
+                    if (name != null && seen.add(name)) {
+                        componentsSchemas[name]?.let(frontier::add)
+                    }
+                }
+                schema.properties?.values?.forEach(frontier::add)
+                (schema as? ArraySchema)?.items?.let(frontier::add)
+                if (schema !is ArraySchema) schema.items?.let(frontier::add)
+                schema.allOf?.forEach(frontier::add)
+                schema.oneOf?.forEach(frontier::add)
+                schema.anyOf?.forEach(frontier::add)
+                (schema.additionalProperties as? Schema<*>)?.let(frontier::add)
+            }
+            return seen
+        }
+
+        // Extract the JSON Schema of the success response (first 2xx with
+        // a JSON content schema) from an OpenAPI operation. Returns the
+        // schema as a JSON string, or `null` if unavailable.
+        //
+        // The result preserves $ref markers (pointing into the
+        // `#/$defs/X` namespace) for any property whose original schema
+        // was a named-component reference, so downstream code-surface
+        // generators can emit one `interface Foo { ... }` block instead
+        // of inlining Foo's shape at every call site.
+        private fun extractOutputSchema(
+            operation: Operation,
+            componentsSchemas: Map<String, Schema<*>>,
+        ): String? {
             val responses = operation.responses ?: return null
             // Try 200, 201, then any 2xx
             val successResponse = responses["200"]
@@ -302,70 +429,101 @@ class OpenApiOperationTool(
                 ?: return null
             val schema = mediaType.schema ?: return null
             return try {
-                jacksonObjectMapper().writeValueAsString(schemaToMap(schema))
+                jacksonObjectMapper().writeValueAsString(schemaToMap(schema, componentsSchemas))
             } catch (_: Exception) {
                 null
             }
         }
 
-        /**
-         * Convert a Swagger [Schema] to a Map suitable for JSON
-         * serialization. Handles object, array, primitive, oneOf/anyOf
-         * combinators, and nullable types.
-         *
-         * The output is consumed by `JavaScriptCodeSurfaceBuilder` /
-         * `PythonCodeSurfaceBuilder` to emit typed interfaces; missing
-         * fields here become `unknown` in the generated TypeScript.
-         */
-        private fun schemaToMap(schema: Schema<*>): Map<String, Any?> = buildMap {
-            // Type inference: explicit `type` wins; otherwise infer from
-            // structure. A schema with `properties` but no `type` is
-            // implicitly object; a schema with `items` is implicitly array.
-            val inferredType = schema.type ?: when {
-                schema is ArraySchema || schema.items != null -> "array"
-                schema.properties != null -> "object"
-                schema.allOf != null || schema.oneOf != null || schema.anyOf != null -> "object"
-                else -> null
+        // Convert a Swagger [Schema] to a Map suitable for JSON
+        // serialization. Handles object, array, primitive, oneOf/anyOf
+        // combinators, and nullable types.
+        //
+        // When [schema] is a bare $ref node (the spec was parsed via
+        // [OpenApiLearner.parseSpecPreservingRefs]), emits a JSON Schema
+        // $ref marker pointing into a `#/$defs/TypeName` namespace
+        // rather than inlining the referenced shape. Downstream surface
+        // generators emit one named interface and reference it from every
+        // method that returns the type — what shrinks Sheets/Docs from
+        // 200KB+ of inlined types per namespace down to the registry
+        // size + a few bytes per signature.
+        //
+        // The output is consumed by `JavaScriptCodeSurfaceBuilder` /
+        // `PythonCodeSurfaceBuilder` to emit typed interfaces; missing
+        // fields here become `unknown` in the generated TypeScript.
+        private fun schemaToMap(
+            schema: Schema<*>,
+            componentsSchemas: Map<String, Schema<*>>,
+        ): Map<String, Any?> {
+            // Bare `$ref`: emit a JSON-Schema reference into the `$defs`
+            // namespace. Don't inline the target — the named-types map
+            // ships separately and the surface builder splices it in once
+            // per namespace.
+            schema.`$ref`?.let { ref ->
+                val name = extractRefName(ref)
+                if (name != null) {
+                    return buildMap<String, Any?> {
+                        put("\$ref", "#/\$defs/$name")
+                        schema.description?.let { put("description", it) }
+                    }
+                }
+                // External ref or malformed — fall through to the inline
+                // walk below; without a registry to dereference against,
+                // it'll come out as `unknown` rather than crashing.
             }
-            inferredType?.let { put("type", it) }
+            return buildMap {
+                // Type inference: explicit `type` wins; otherwise infer from
+                // structure. A schema with `properties` but no `type` is
+                // implicitly object; a schema with `items` is implicitly array.
+                val inferredType = schema.type ?: when {
+                    schema is ArraySchema || schema.items != null -> "array"
+                    schema.properties != null -> "object"
+                    schema.allOf != null || schema.oneOf != null || schema.anyOf != null -> "object"
+                    else -> null
+                }
+                inferredType?.let { put("type", it) }
 
-            schema.description?.let { put("description", it) }
-            schema.format?.let { put("format", it) }
-            // OpenAPI 3.0 nullable + 3.1 type:["x","null"] both map here.
-            if (schema.nullable == true) put("nullable", true)
+                schema.description?.let { put("description", it) }
+                schema.format?.let { put("format", it) }
+                // OpenAPI 3.0 nullable + 3.1 type:["x","null"] both map here.
+                if (schema.nullable == true) put("nullable", true)
 
-            if (schema.properties != null) {
-                put("properties", schema.properties.mapValues { (_, v) -> schemaToMap(v) })
-            }
-            if (schema.required != null) {
-                put("required", schema.required)
-            }
-            // Array items — handle both ArraySchema.items (typed) and
-            // generic Schema.items (post-resolveFully sometimes lands here).
-            val items = (schema as? ArraySchema)?.items ?: schema.items
-            if (items != null) {
-                put("items", schemaToMap(items))
-            }
+                if (schema.properties != null) {
+                    put(
+                        "properties",
+                        schema.properties.mapValues { (_, v) -> schemaToMap(v, componentsSchemas) },
+                    )
+                }
+                if (schema.required != null) {
+                    put("required", schema.required)
+                }
+                // Array items — handle both ArraySchema.items (typed) and
+                // generic Schema.items (post-resolveFully sometimes lands here).
+                val items = (schema as? ArraySchema)?.items ?: schema.items
+                if (items != null) {
+                    put("items", schemaToMap(items, componentsSchemas))
+                }
 
-            // allOf / oneOf / anyOf — emit a union or merged shape.
-            // Downstream TS emitter treats these as union types when the
-            // shape isn't an object merge.
-            schema.allOf?.let { branches ->
-                if (branches.isNotEmpty()) put("allOf", branches.map { schemaToMap(it) })
-            }
-            schema.oneOf?.let { branches ->
-                if (branches.isNotEmpty()) put("oneOf", branches.map { schemaToMap(it) })
-            }
-            schema.anyOf?.let { branches ->
-                if (branches.isNotEmpty()) put("anyOf", branches.map { schemaToMap(it) })
-            }
+                // allOf / oneOf / anyOf — emit a union or merged shape.
+                // Downstream TS emitter treats these as union types when the
+                // shape isn't an object merge.
+                schema.allOf?.let { branches ->
+                    if (branches.isNotEmpty()) put("allOf", branches.map { schemaToMap(it, componentsSchemas) })
+                }
+                schema.oneOf?.let { branches ->
+                    if (branches.isNotEmpty()) put("oneOf", branches.map { schemaToMap(it, componentsSchemas) })
+                }
+                schema.anyOf?.let { branches ->
+                    if (branches.isNotEmpty()) put("anyOf", branches.map { schemaToMap(it, componentsSchemas) })
+                }
 
-            schema.enum?.let { put("enum", it) }
-            // Additional properties — `Record<string, T>`-like maps.
-            when (val ap = schema.additionalProperties) {
-                is Schema<*> -> put("additionalProperties", schemaToMap(ap))
-                is Boolean -> put("additionalProperties", ap)
-                else -> {}
+                schema.enum?.let { put("enum", it) }
+                // Additional properties — `Record<string, T>`-like maps.
+                when (val ap = schema.additionalProperties) {
+                    is Schema<*> -> put("additionalProperties", schemaToMap(ap, componentsSchemas))
+                    is Boolean -> put("additionalProperties", ap)
+                    else -> {}
+                }
             }
         }
 
@@ -397,12 +555,15 @@ class OpenApiOperationTool(
             ).joinToString(". ").ifBlank { "No description available" }
         }
 
-        internal fun buildInputSchema(operation: Operation): Tool.InputSchema {
+        internal fun buildInputSchema(
+            operation: Operation,
+            componentsSchemas: Map<String, Schema<*>>,
+        ): Tool.InputSchema {
             val parameters = mutableListOf<Tool.Parameter>()
 
             // Path and query parameters
             operation.parameters?.forEach { param ->
-                parameters.add(mapParameter(param))
+                parameters.add(mapParameter(param, componentsSchemas))
             }
             val pathQueryNames = parameters.map { it.name }.toSet()
 
@@ -415,7 +576,12 @@ class OpenApiOperationTool(
             // body containing a property named `body` — every GitHub
             // `issues/create`, `issues/create-comment`, `pulls/create` — got
             // reduced to a string by the LLM and rejected with HTTP 422).
-            operation.requestBody?.content?.values?.firstOrNull()?.schema?.let { schema ->
+            //
+            // Body schema may itself be a $ref node when the spec was
+            // parsed via `parseSpecPreservingRefs`; deref so the property
+            // expansion below still finds the referenced shape's fields.
+            operation.requestBody?.content?.values?.firstOrNull()?.schema?.let { rawSchema ->
+                val schema = rawSchema.deref(componentsSchemas)
                 val bodyRequiredOverall = operation.requestBody?.required ?: false
                 @Suppress("UNCHECKED_CAST")
                 val properties = schema.properties as? Map<String, Schema<*>>
@@ -429,24 +595,42 @@ class OpenApiOperationTool(
                                 schema = propSchema,
                                 description = propSchema.description ?: propName,
                                 required = bodyRequiredOverall && propName in bodyRequired,
+                                componentsSchemas = componentsSchemas,
                             ),
                         )
                     }
                 } else {
                     // Non-object body (raw string, array, etc.) — keep the
                     // legacy `body` wrapper since there's nothing to flatten.
-                    parameters.add(mapSchemaToParameter("body", schema, "Request body", true))
+                    parameters.add(
+                        mapSchemaToParameter(
+                            name = "body",
+                            schema = schema,
+                            description = "Request body",
+                            required = true,
+                            componentsSchemas = componentsSchemas,
+                        ),
+                    )
                 }
             }
 
             return Tool.InputSchema.of(*parameters.toTypedArray())
         }
 
-        private fun mapParameter(param: Parameter): Tool.Parameter {
-            val type = mapSchemaType(param.schema)
-            val itemType = if (type == Tool.ParameterType.ARRAY && param.schema != null) {
-                if (param.schema is ArraySchema) {
-                    (param.schema as ArraySchema).items?.let { mapSchemaType(it) } ?: Tool.ParameterType.STRING
+        private fun mapParameter(
+            param: Parameter,
+            componentsSchemas: Map<String, Schema<*>>,
+        ): Tool.Parameter {
+            // Param schemas are typically primitive but specs in the wild
+            // sometimes ref out to a named primitive alias (e.g.
+            // `#/components/schemas/PetStatus` for an enum). Deref so the
+            // type/enum extraction below sees the underlying shape.
+            val schema = param.schema?.deref(componentsSchemas)
+            val type = mapSchemaType(schema)
+            val itemType = if (type == Tool.ParameterType.ARRAY && schema != null) {
+                if (schema is ArraySchema) {
+                    schema.items?.deref(componentsSchemas)?.let { mapSchemaType(it) }
+                        ?: Tool.ParameterType.STRING
                 } else {
                     Tool.ParameterType.STRING
                 }
@@ -460,7 +644,7 @@ class OpenApiOperationTool(
                 // (the GitHub spec uses this for state filters). Drop nulls
                 // rather than NPE on `.toString()`. Same fix as
                 // `OpenApiModelBuilder.convertSchema`.
-                enumValues = param.schema?.enum?.mapNotNull { it?.toString() },
+                enumValues = schema?.enum?.mapNotNull { it?.toString() },
                 itemType = itemType,
             )
         }
@@ -470,24 +654,33 @@ class OpenApiOperationTool(
             schema: Schema<*>,
             description: String,
             required: Boolean,
+            componentsSchemas: Map<String, Schema<*>>,
         ): Tool.Parameter {
-            val type = mapSchemaType(schema)
+            // Deref the property schema so a bare $ref node (under the
+            // ref-preserving parse) resolves to its target shape before we
+            // read `.type`, `.properties`, etc. Without this, every $ref-
+            // typed body field would land here as STRING (the fallback in
+            // `mapSchemaType` for unknown type), losing structure.
+            val derefed = schema.deref(componentsSchemas)
+            val type = mapSchemaType(derefed)
 
-            val properties = if (type == Tool.ParameterType.OBJECT && schema.properties != null) {
-                val requiredProps = schema.required?.toSet() ?: emptySet()
-                schema.properties.map { (propName, propSchema) ->
+            val properties = if (type == Tool.ParameterType.OBJECT && derefed.properties != null) {
+                val requiredProps = derefed.required?.toSet() ?: emptySet()
+                derefed.properties.map { (propName, propSchema) ->
                     mapSchemaToParameter(
                         name = propName,
                         schema = propSchema,
                         description = propSchema.description ?: propName,
                         required = propName in requiredProps,
+                        componentsSchemas = componentsSchemas,
                     )
                 }
             } else null
 
             val itemType = if (type == Tool.ParameterType.ARRAY) {
-                if (schema is ArraySchema) {
-                    schema.items?.let { mapSchemaType(it) } ?: Tool.ParameterType.STRING
+                if (derefed is ArraySchema) {
+                    derefed.items?.deref(componentsSchemas)?.let { mapSchemaType(it) }
+                        ?: Tool.ParameterType.STRING
                 } else {
                     // Fallback for array params without ArraySchema (e.g. Swagger 2.0 conversion)
                     Tool.ParameterType.STRING
@@ -497,9 +690,9 @@ class OpenApiOperationTool(
             return Tool.Parameter(
                 name = name,
                 type = type,
-                description = schema.description ?: description,
+                description = derefed.description ?: description,
                 required = required,
-                enumValues = schema.enum?.mapNotNull { it?.toString() },
+                enumValues = derefed.enum?.mapNotNull { it?.toString() },
                 properties = properties,
                 itemType = itemType,
             )
@@ -517,4 +710,27 @@ class OpenApiOperationTool(
             }
         }
     }
+}
+
+/**
+ * Follow a single level of `$ref` against [componentsSchemas]. Returns
+ * [this] if there's no `$ref` or the referenced name isn't in the
+ * registry. Used wherever the runtime walks properties or types and
+ * expects a populated schema, not a bare reference (e.g. building the
+ * request body, mapping property types into [Tool.Parameter]s).
+ *
+ * File-scoped so both the runtime instance methods and the
+ * companion-object schema helpers can call it without re-importing.
+ */
+internal fun Schema<*>.deref(
+    componentsSchemas: Map<String, Schema<*>>,
+): Schema<*> {
+    val ref = this.`$ref` ?: return this
+    val name = extractRefName(ref) ?: return this
+    return componentsSchemas[name] ?: this
+}
+
+internal fun extractRefName(ref: String): String? {
+    val prefix = "#/components/schemas/"
+    return if (ref.startsWith(prefix)) ref.removePrefix(prefix).takeIf { it.isNotBlank() } else null
 }

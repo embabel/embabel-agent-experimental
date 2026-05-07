@@ -121,9 +121,17 @@ internal object OpenApiModelBuilder {
     // --- Schema conversion ---
 
     private fun convertSchema(schema: Schema<*>, nameHint: String? = null): ApiSchema {
-        // Check for $ref — the parser resolves refs but we can detect named types
-        // by checking if this schema has no inline properties but has a title or
-        // was obtained from components/schemas
+        // Bare $ref node — the spec was parsed via
+        // [OpenApiLearner.parseSpecPreservingRefs] and the property's schema
+        // is `$ref: '#/components/schemas/Foo'` with `.type` and
+        // `.properties` left null. Emit an [ApiSchema.Ref] so consumers
+        // (DataDictionary, code surface generators) can resolve the link to
+        // the named type instead of seeing a structureless object.
+        schema.`$ref`?.let { ref ->
+            extractRefName(ref)?.let { name ->
+                return ApiSchema.Ref(typeName = name, description = schema.description)
+            }
+        }
         return when (schema.type) {
             "string" -> ApiSchema.Primitive(
                 type = PrimitiveType.STRING,
@@ -246,6 +254,20 @@ internal object OpenApiModelBuilder {
 
     private fun operationDescription(operation: Operation): String =
         OpenApiOperationTool.operationDescription(operation)
+
+    /**
+     * Pull the type name out of an internal component reference.
+     *
+     * Swagger writes them as `#/components/schemas/Foo` (the JSON-Pointer
+     * form). External refs (cross-document) come through resolved already,
+     * so anything that isn't the internal-components prefix isn't a
+     * named-type reference we know how to surface — return null so the
+     * caller falls through to inline structural conversion.
+     */
+    private fun extractRefName(ref: String): String? {
+        val prefix = "#/components/schemas/"
+        return if (ref.startsWith(prefix)) ref.removePrefix(prefix).takeIf { it.isNotBlank() } else null
+    }
 
     private fun convertMethod(method: PathItem.HttpMethod): HttpMethod = when (method) {
         PathItem.HttpMethod.GET -> HttpMethod.GET
