@@ -40,7 +40,7 @@ import org.springframework.web.util.UriComponentsBuilder
  * materialized at runtime from an OpenAPI spec — no code generation needed.
  */
 class OpenApiOperationTool(
-    private val baseUrl: String,
+    internal val baseUrl: String,
     private val path: String,
     private val httpMethod: PathItem.HttpMethod,
     private val operation: Operation,

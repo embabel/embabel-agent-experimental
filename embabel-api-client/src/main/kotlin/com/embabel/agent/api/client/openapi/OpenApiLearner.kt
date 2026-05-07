@@ -26,6 +26,7 @@ import io.swagger.v3.oas.models.Operation
 import io.swagger.v3.oas.models.PathItem
 import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.security.SecurityScheme
+import io.swagger.v3.oas.models.servers.Server
 import io.swagger.parser.OpenAPIParser
 import io.swagger.v3.parser.core.models.ParseOptions
 import org.slf4j.LoggerFactory
@@ -223,7 +224,7 @@ class OpenApiLearner(
             // from these operations only — uncurated ops' types get
             // dropped from the registry, which for big specs (Sheets,
             // Docs, GitHub) cuts the JSON the LLM has to load by ~95%.
-            val allTools = materializeTools(openApi, filtered.baseUrl, restClient, includedNames)
+            val allTools = materializeTools(openApi, source, filtered.baseUrl, restClient, includedNames)
             val includedTools = allTools.filterKeys { it in includedNames }
 
             val toolsByResource = filtered.resources.associate { resource ->
@@ -375,34 +376,30 @@ class OpenApiLearner(
         }
 
         internal fun resolveBaseUrl(openApi: OpenAPI, source: String): String {
-            // Check top-level servers first (ignore auto-generated "/" placeholder)
-            val serverUrl = openApi.servers?.firstOrNull()?.url
-                ?.takeIf { it != "/" }
+            return resolveServerUrl(openApi.servers, source)
+                ?: openApi.paths?.values?.firstNotNullOfOrNull { resolveServerUrl(it.servers, source) }
+                ?: sourceAuthority(source)
+        }
 
-            if (serverUrl != null) {
-                if (serverUrl.startsWith("http://") || serverUrl.startsWith("https://")) {
-                    return serverUrl
-                }
-            }
+        /**
+         * Resolve a single [Server] list to a usable absolute base URL.
+         * Returns null if the list is empty / null / contains only the
+         * auto-generated `"/"` placeholder. Relative server URLs are
+         * resolved against the spec [source].
+         *
+         * Used both for spec-level resolution and for OpenAPI 3
+         * operation/path-level `servers:` overrides.
+         */
+        private fun resolveServerUrl(servers: List<Server>?, source: String): String? {
+            val raw = servers?.firstOrNull()?.url?.takeIf { it.isNotBlank() && it != "/" }
+                ?: return null
+            return if (raw.startsWith("http://") || raw.startsWith("https://")) raw
+            else sourceAuthority(source) + raw
+        }
 
-            // Check path-level servers (some specs define servers per-path, not globally)
-            val pathServerUrl = openApi.paths?.values?.firstOrNull()
-                ?.servers?.firstOrNull()?.url
-            if (pathServerUrl != null &&
-                (pathServerUrl.startsWith("http://") || pathServerUrl.startsWith("https://"))
-            ) {
-                return pathServerUrl
-            }
-
-            // Relative server URL — resolve against source
-            if (serverUrl != null) {
-                val sourceUri = java.net.URI(source)
-                val baseAuthority = "${sourceUri.scheme}://${sourceUri.authority}"
-                return baseAuthority + serverUrl
-            }
-
-            val sourceUri = java.net.URI(source)
-            return "${sourceUri.scheme}://${sourceUri.authority}"
+        private fun sourceAuthority(source: String): String {
+            val u = java.net.URI(source)
+            return "${u.scheme}://${u.authority}"
         }
 
         internal fun deriveApiName(openApi: OpenAPI): String {
@@ -421,6 +418,7 @@ class OpenApiLearner(
 
         private fun materializeTools(
             openApi: OpenAPI,
+            source: String,
             baseUrl: String,
             restClient: RestClient,
             curatedOperationNames: Set<String>,
@@ -442,6 +440,10 @@ class OpenApiLearner(
             val curatedOps = mutableListOf<Operation>()
             val mergedByName = mutableMapOf<String, OperationLocation>()
             openApi.paths?.forEach { (path, pathItem) ->
+                // OpenAPI 3 servers precedence: operation > path > spec.
+                // The spec-level fallback was already computed by the caller
+                // and passed in as `baseUrl`.
+                val pathBaseUrl = resolveServerUrl(pathItem.servers, source) ?: baseUrl
                 pathItem.readOperationsMap()?.forEach { (method, operation) ->
                     val mergedOperation = operation.apply {
                         val pathParams = pathItem.parameters ?: emptyList()
@@ -449,8 +451,9 @@ class OpenApiLearner(
                         val existingNames = opParams.map { it.name }.toSet()
                         parameters = opParams + pathParams.filter { it.name !in existingNames }
                     }
+                    val opBaseUrl = resolveServerUrl(mergedOperation.servers, source) ?: pathBaseUrl
                     val name = OpenApiOperationTool.operationName(method, path, mergedOperation)
-                    mergedByName[name] = OperationLocation(path, method, mergedOperation)
+                    mergedByName[name] = OperationLocation(path, method, mergedOperation, opBaseUrl)
                     if (name in curatedOperationNames) curatedOps.add(mergedOperation)
                 }
             }
@@ -464,7 +467,7 @@ class OpenApiLearner(
 
             for ((name, location) in mergedByName) {
                 val tool = OpenApiOperationTool(
-                    baseUrl = baseUrl,
+                    baseUrl = location.baseUrl,
                     path = location.path,
                     httpMethod = location.method,
                     operation = location.operation,
@@ -482,6 +485,7 @@ class OpenApiLearner(
             val path: String,
             val method: PathItem.HttpMethod,
             val operation: Operation,
+            val baseUrl: String,
         )
 
         private fun groupByTag(
