@@ -194,7 +194,14 @@ internal open class PromptedActionSpecAction(
         for (input in inputs) {
             val inputValue = processContext.blackboard[input.name]
                 ?: throw IllegalArgumentException("Input variable '${input.name}' not found in process context.")
-            templateModel[input.name] = inputValue
+            // For values that carry a DomainType identity at runtime
+            // (pack-declared signals, dynamic projections), the prompt
+            // wants to see the property map — `{{ hubSpotContactCreated.email }}`
+            // must walk to `signal.properties["email"]`. Jinja's bean
+            // introspection on the carrier class would otherwise return
+            // blanks because the JVM class exposes no `email` getter.
+            templateModel[input.name] =
+                if (inputValue is DomainInstance) inputValue.properties else inputValue
         }
         // Special case for user input, we use the simple name
         processContext.blackboard.last<UserInput>()?.let { userInput ->
