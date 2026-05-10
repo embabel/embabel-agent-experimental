@@ -16,6 +16,8 @@
 package com.embabel.agent.sandbox
 
 import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.sandbox.docker.DockerExecutor
+import com.embabel.agent.sandbox.docker.DockerSandboxSessionManager
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*

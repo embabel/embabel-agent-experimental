@@ -13,8 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.sandbox
+package com.embabel.agent.sandbox.process
 
+import com.embabel.agent.sandbox.ExecutionArtifact
+import com.embabel.agent.sandbox.ExecutionRequest
+import com.embabel.agent.sandbox.ExecutionResult
+import com.embabel.agent.sandbox.SandboxConfig
+import com.embabel.agent.sandbox.SandboxedExecutor
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
@@ -221,7 +226,7 @@ class ProcessExecutor(
         return Files.list(outputDir)
             .filter { Files.isRegularFile(it) }
             .map { file ->
-                ExecutionArtifact(
+                ExecutionArtifact.File(
                     name = file.fileName.toString(),
                     path = file.toAbsolutePath(),
                     mimeType = ExecutionArtifact.inferMimeType(file.fileName.toString()),
