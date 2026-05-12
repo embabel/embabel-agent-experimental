@@ -13,8 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.sandbox
+package com.embabel.agent.sandbox.docker
 
+import com.embabel.agent.sandbox.SandboxConfig
+import com.embabel.agent.sandbox.SandboxSession
+import com.embabel.agent.sandbox.SandboxSessionManager
 import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -47,6 +50,7 @@ class DockerSandboxSessionManager @JvmOverloads constructor(
         config: SandboxConfig,
         owner: String?,
         ttl: Duration,
+        metadata: Map<String, String>,
     ): SandboxSession {
         // Enforce limits
         if (maxTotalSessions > 0 && sessions.size >= maxTotalSessions) {
@@ -72,6 +76,7 @@ class DockerSandboxSessionManager @JvmOverloads constructor(
             config = config,
             owner = owner,
             ttl = ttl,
+            metadata = metadata,
         )
 
         sessions[session.id] = session

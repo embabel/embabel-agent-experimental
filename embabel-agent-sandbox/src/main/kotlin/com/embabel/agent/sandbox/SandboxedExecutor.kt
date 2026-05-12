@@ -277,22 +277,77 @@ sealed interface ExecutionResult {
 }
 
 /**
- * An artifact (file) produced by execution.
+ * Something produced by a script execution. Two kinds:
  *
- * @param name the file name
- * @param path absolute path to the artifact
- * @param mimeType detected MIME type
- * @param sizeBytes file size in bytes
+ * - [File] — bytes the script wrote (the classic case: a CSV, a PDF,
+ *   a generated HTML app). The runner copies the file out of the
+ *   sandbox and the artifact carries name + path + mime type + size.
+ *
+ * - [Entity] — a *reference* to a domain object the script touched
+ *   (a Person, an Issue, a Message). Carries identity, not bytes.
+ *   Lets downstream consumers — chat UIs, provenance writers, context
+ *   graphs — see *what* an execution interacted with, not just what
+ *   files it wrote. Emitting executors decide what counts as an
+ *   entity for their domain (a Cypher executor might emit one per
+ *   returned node; an integration tool one per fetched record).
+ *
+ * Sealed so the set of cases is closed and exhaustive — when this
+ * grows (e.g. `Metric`, `Event`), the compiler flags every consumer
+ * that needs to handle the new case.
  */
-data class ExecutionArtifact(
-    val name: String,
-    val path: Path,
-    val mimeType: String? = null,
-    val sizeBytes: Long,
-) {
+sealed interface ExecutionArtifact {
+    /** Human-readable identifier, used in audit logs and UIs. */
+    val name: String
+
+    /**
+     * A file produced by execution.
+     *
+     * @param name the file name
+     * @param path absolute path to the artifact
+     * @param mimeType detected MIME type
+     * @param sizeBytes file size in bytes
+     */
+    data class File(
+        override val name: String,
+        val path: Path,
+        val mimeType: String? = null,
+        val sizeBytes: Long,
+    ) : ExecutionArtifact
+
+    /**
+     * A reference to a domain entity the script touched. Carries
+     * identity and minimal display metadata — *not* the entity's
+     * full body. Consumers that need the body re-fetch it via the
+     * relevant tool / data path.
+     *
+     * @param label the entity's type (e.g. "Person", "Message",
+     *   "Issue"). Free-form by convention; a pack-declared ontology
+     *   registry is the natural place to constrain these.
+     * @param id a stable identifier within the [label]'s namespace.
+     *   Combined with [source], `(source, label, id)` uniquely
+     *   identifies the entity across executions.
+     * @param displayName optional human-readable label. UIs that
+     *   render entity chips show this; falls back to [id] when null.
+     * @param source optional opaque tag for the producing tool /
+     *   integration / namespace (e.g. "gmail", "github",
+     *   "context-graph"). Used by identity resolution to decide
+     *   whether two artifacts refer to the same entity.
+     * @param name defaults to "[label]/[id]" — overridable for
+     *   producers that want a richer audit-log line.
+     */
+    data class Entity(
+        val label: String,
+        val id: String,
+        val displayName: String? = null,
+        val source: String? = null,
+        override val name: String = "$label/$id",
+    ) : ExecutionArtifact
+
     companion object {
         /**
-         * Infer MIME type from file name extension.
+         * Infer MIME type from file name extension. Kept here (not on
+         * [File]) so callers that already do `ExecutionArtifact.inferMimeType(...)`
+         * — the existing public API — keep working unchanged.
          */
         fun inferMimeType(fileName: String): String {
             val extension = fileName.substringAfterLast('.', "").lowercase()

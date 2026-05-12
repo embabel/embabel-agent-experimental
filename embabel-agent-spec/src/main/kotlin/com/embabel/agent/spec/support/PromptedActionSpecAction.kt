@@ -69,7 +69,7 @@ internal open class PromptedActionSpecAction(
             return@execute
         }
         val domainTypes = this.domainTypes
-        val resolved = domainTypes.find { it.name == spec.outputTypeName }
+        val resolved = domainTypes.findTypeByNameOrSimpleName(spec.outputTypeName)
             ?: resolveJvmOutputType(spec.outputTypeName)
             ?: throw IllegalArgumentException("Output type '${spec.outputTypeName}' not found in agent schema types.")
         val output = when (resolved) {
@@ -159,7 +159,7 @@ internal open class PromptedActionSpecAction(
         logger.info("Input map for action name {}: {}", name, templateModel)
 
         val outputSchemaType =
-            processContext.agentProcess.agent.dynamicTypes.find { it.name == spec.outputTypeName }
+            processContext.agentProcess.agent.dynamicTypes.findTypeByNameOrSimpleName(spec.outputTypeName) as? DynamicType
                 ?: throw IllegalArgumentException("Output type '${spec.outputTypeName}' not found in agent schema types.")
         val jsonSchema = JsonSchemaGenerator.generate(outputSchemaType)
         logger.info("Schema type for action name {}: {}", name, outputSchemaType)
@@ -194,7 +194,14 @@ internal open class PromptedActionSpecAction(
         for (input in inputs) {
             val inputValue = processContext.blackboard[input.name]
                 ?: throw IllegalArgumentException("Input variable '${input.name}' not found in process context.")
-            templateModel[input.name] = inputValue
+            // For values that carry a DomainType identity at runtime
+            // (pack-declared signals, dynamic projections), the prompt
+            // wants to see the property map — `{{ hubSpotContactCreated.email }}`
+            // must walk to `signal.properties["email"]`. Jinja's bean
+            // introspection on the carrier class would otherwise return
+            // blanks because the JVM class exposes no `email` getter.
+            templateModel[input.name] =
+                if (inputValue is DomainInstance) inputValue.properties else inputValue
         }
         // Special case for user input, we use the simple name
         processContext.blackboard.last<UserInput>()?.let { userInput ->

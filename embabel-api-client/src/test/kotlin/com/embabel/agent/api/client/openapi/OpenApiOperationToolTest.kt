@@ -33,6 +33,7 @@ import org.springframework.http.MediaType
 import org.springframework.test.web.client.MockRestServiceServer
 import org.springframework.test.web.client.match.MockRestRequestMatchers.*
 import org.springframework.test.web.client.response.MockRestResponseCreators.*
+import org.springframework.util.LinkedMultiValueMap
 import org.springframework.web.client.RestClient
 
 class OpenApiOperationToolTest {
@@ -481,7 +482,7 @@ class OpenApiOperationToolTest {
                 this.schema = schema
             }
             val op = Operation().apply { parameters = listOf(param) }
-            val inputSchema = OpenApiOperationTool.buildInputSchema(op)
+            val inputSchema = OpenApiOperationTool.buildInputSchema(op, emptyMap())
             val idsParam = inputSchema.parameters.find { it.name == "ids" }!!
             assertEquals(Tool.ParameterType.ARRAY, idsParam.type)
             assertEquals(Tool.ParameterType.STRING, idsParam.itemType, "Should default to STRING")
@@ -498,7 +499,7 @@ class OpenApiOperationToolTest {
                 this.schema = schema
             }
             val op = Operation().apply { parameters = listOf(param) }
-            val inputSchema = OpenApiOperationTool.buildInputSchema(op)
+            val inputSchema = OpenApiOperationTool.buildInputSchema(op, emptyMap())
             val idsParam = inputSchema.parameters.find { it.name == "ids" }!!
             assertEquals(Tool.ParameterType.ARRAY, idsParam.type)
             assertEquals(Tool.ParameterType.INTEGER, idsParam.itemType)
@@ -720,7 +721,14 @@ class OpenApiOperationToolTest {
         }
 
         @Test
-        fun `GET ignores unknown parameters - they are not added as query params`() {
+        fun `GET forwards undeclared parameters as query string (permissive mode)`() {
+            // Real-world specs — and especially synthesized specs from API
+            // discovery — frequently omit query params that the server
+            // actually accepts. Silently dropping them sends the model into
+            // a retry loop because it sees an empty / unfiltered response
+            // and assumes its arguments were wrong. Forward them instead;
+            // the server will reject genuinely unknown params with a real
+            // error the model can act on.
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.GET, "/pets",
                 operation = Operation().apply {
@@ -734,11 +742,13 @@ class OpenApiOperationToolTest {
                     )
                 },
             )
-            server.expect(requestTo("https://api.example.com/pets?limit=10"))
+            server.expect(requestTo(allOf(
+                containsString("limit=10"),
+                containsString("unknown=value"),
+            )))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
 
-            // "unknown" should not appear in query string
             val result = tool.call("""{"limit": 10, "unknown": "value"}""")
             assertIsText(result, "[]")
             server.verify()
@@ -1106,7 +1116,11 @@ class OpenApiOperationToolTest {
         }
 
         @Test
-        fun `DELETE with path parameter`() {
+        fun `DELETE with path parameter and 204 returns success indicator not empty text`() {
+            // 204 No Content is the standard success response for DELETE.
+            // The tool must produce a non-empty Text result so downstream
+            // consumers (which wrap it in a TextPart that rejects empty
+            // strings) don't crash.
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.DELETE, "/pets/{petId}",
                 operation = Operation().apply {
@@ -1123,10 +1137,211 @@ class OpenApiOperationToolTest {
             )
             server.expect(requestTo("https://api.example.com/pets/42"))
                 .andExpect(method(HttpMethod.DELETE))
-                .andRespond(withSuccess("", MediaType.APPLICATION_JSON))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.NO_CONTENT))
 
             val result = tool.call("""{"petId": 42}""")
-            assertInstanceOf(Tool.Result.Text::class.java, result)
+            val text = assertInstanceOf(Tool.Result.Text::class.java, result)
+            assertTrue(text.content.isNotBlank(), "must be non-empty, got: '${text.content}'")
+            assertTrue(text.content.contains("204"), "should mention status, got: ${text.content}")
+            server.verify()
+        }
+
+        // --- Form-encoded request bodies (Stripe and friends) ---
+        //
+        // Stripe's API only accepts `application/x-www-form-urlencoded`
+        // and explicitly rejects JSON. When a spec declares ONLY
+        // form-urlencoded for an op's request body, the tool encodes the
+        // params as form pairs using Rails / Stripe bracket syntax for
+        // nested objects and arrays.
+
+        @Test
+        fun `POST with form-urlencoded body — flat params`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/v1/customers",
+                operation = Operation().apply {
+                    operationId = "customersCreate"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply {
+                                        addProperty("email", StringSchema())
+                                        addProperty("name", StringSchema())
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v1/customers"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_FORM_URLENCODED))
+                .andExpect(content().formData(LinkedMultiValueMap<String, String>().apply {
+                    add("email", "alice@acme.com")
+                    add("name", "Alice")
+                }))
+                .andRespond(withSuccess("""{"id": "cus_1"}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"email": "alice@acme.com", "name": "Alice"}""")
+            assertIsText(result, """{"id": "cus_1"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST with form-urlencoded body — nested object uses bracket syntax`() {
+            // Stripe's `metadata` field is a nested object; the wire form
+            // is `metadata[order_id]=ord_1&metadata[source]=cli`.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/v1/customers",
+                operation = Operation().apply {
+                    operationId = "customersCreate"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply {
+                                        addProperty("email", StringSchema())
+                                        addProperty("metadata", ObjectSchema())
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v1/customers"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_FORM_URLENCODED))
+                .andExpect(content().formData(LinkedMultiValueMap<String, String>().apply {
+                    add("email", "alice@acme.com")
+                    add("metadata[order_id]", "ord_1")
+                    add("metadata[source]", "cli")
+                }))
+                .andRespond(withSuccess("""{"id": "cus_1"}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call(
+                """{"email": "alice@acme.com", "metadata": {"order_id": "ord_1", "source": "cli"}}""",
+            )
+            assertIsText(result, """{"id": "cus_1"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST with form-urlencoded body — list of objects uses indexed brackets`() {
+            // Stripe's `line_items` and `items` use `items[0][price]=p_1`
+            // syntax. Verify list-of-map flattening.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/v1/payment_links",
+                operation = Operation().apply {
+                    operationId = "paymentLinksCreate"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply {
+                                        addProperty("line_items", ArraySchema())
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v1/payment_links"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_FORM_URLENCODED))
+                .andExpect(content().formData(LinkedMultiValueMap<String, String>().apply {
+                    add("line_items[0][price]", "price_1")
+                    add("line_items[0][quantity]", "2")
+                    add("line_items[1][price]", "price_2")
+                    add("line_items[1][quantity]", "1")
+                }))
+                .andRespond(withSuccess("""{"id": "plink_1"}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call(
+                """{"line_items": [{"price": "price_1", "quantity": 2}, {"price": "price_2", "quantity": 1}]}""",
+            )
+            assertIsText(result, """{"id": "plink_1"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST with form-urlencoded body — booleans render as true-false strings, nulls dropped`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/v1/refunds",
+                operation = Operation().apply {
+                    operationId = "refundsCreate"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply {
+                                        addProperty("charge", StringSchema())
+                                        addProperty("refund_application_fee", BooleanSchema())
+                                        addProperty("reason", StringSchema())
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v1/refunds"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_FORM_URLENCODED))
+                .andExpect(content().formData(LinkedMultiValueMap<String, String>().apply {
+                    add("charge", "ch_1")
+                    add("refund_application_fee", "true")
+                }))
+                .andRespond(withSuccess("""{"id": "re_1"}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call(
+                """{"charge": "ch_1", "refund_application_fee": true, "reason": null}""",
+            )
+            assertIsText(result, """{"id": "re_1"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST falls back to JSON when both JSON and form are declared`() {
+            // Conservative behaviour: if a spec lists both JSON and form
+            // for the same op, JSON wins so we don't break any existing
+            // pack that happened to include both content types.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.POST, "/dual",
+                operation = Operation().apply {
+                    operationId = "dual"
+                    requestBody = RequestBody().apply {
+                        content = Content().apply {
+                            addMediaType(
+                                "application/x-www-form-urlencoded",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply { addProperty("a", StringSchema()) }
+                                },
+                            )
+                            addMediaType(
+                                "application/json",
+                                io.swagger.v3.oas.models.media.MediaType().apply {
+                                    schema = ObjectSchema().apply { addProperty("a", StringSchema()) }
+                                },
+                            )
+                        }
+                    }
+                },
+            )
+            server.expect(requestTo("https://api.example.com/dual"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(content().json("""{"a": "x"}"""))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"a": "x"}""")
+            assertIsText(result, "{}")
             server.verify()
         }
     }
@@ -1552,6 +1767,229 @@ class OpenApiOperationToolTest {
                 val tree = Tool.formatToolTree("test", listOf(tool))
                 assertTrue(tree.isNotBlank())
             }
+        }
+    }
+
+    // ======================================================================
+    // Permissive query-param forwarding for GET/DELETE
+    // (regression: synthesized specs frequently miss query params; silently
+    // dropping them sends the model into a retry loop with no diagnostic.)
+    // ======================================================================
+
+    @Nested
+    inner class PermissiveQueryParams {
+
+        @Test
+        fun `GET with no declared params still forwards caller args`() {
+            // The open-meteo bug: synthesized spec has zero declared params,
+            // LLM passes latitude+longitude+hourly, request must include them.
+            val operation = Operation().apply {
+                operationId = "get_v1_forecast"
+                responses = io.swagger.v3.oas.models.responses.ApiResponses().apply {
+                    addApiResponse(
+                        "200",
+                        io.swagger.v3.oas.models.responses.ApiResponse().description("OK"),
+                    )
+                }
+            }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/v1/forecast",
+                operation = operation,
+                baseUrl = "https://api.open-meteo.com",
+            )
+            server.expect(requestTo(allOf(
+                containsString("https://api.open-meteo.com/v1/forecast"),
+                containsString("latitude=-33.7"),
+                containsString("longitude=150.3"),
+                containsString("hourly=temperature_2m"),
+            )))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""{"hourly":{"temperature_2m":[18.5]}}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call(
+                """{"latitude":-33.7,"longitude":150.3,"hourly":["temperature_2m"]}""",
+            )
+            assertInstanceOf(Tool.Result.Text::class.java, result)
+            server.verify()
+        }
+
+        @Test
+        fun `DELETE with no declared params still forwards caller args`() {
+            val operation = Operation().apply {
+                operationId = "delete_thing"
+                responses = io.swagger.v3.oas.models.responses.ApiResponses().apply {
+                    addApiResponse(
+                        "200",
+                        io.swagger.v3.oas.models.responses.ApiResponse().description("OK"),
+                    )
+                }
+            }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.DELETE,
+                path = "/thing",
+                operation = operation,
+            )
+            server.expect(requestTo(containsString("token=abc")))
+                .andExpect(method(HttpMethod.DELETE))
+                .andRespond(withSuccess("ok", MediaType.TEXT_PLAIN))
+
+            val result = tool.call("""{"token":"abc"}""")
+            assertInstanceOf(Tool.Result.Text::class.java, result)
+            server.verify()
+        }
+
+        @Test
+        fun `GET array params forward as repeated query keys`() {
+            val operation = Operation().apply { operationId = "list" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/list",
+                operation = operation,
+            )
+            server.expect(requestTo(allOf(
+                containsString("tag=a"),
+                containsString("tag=b"),
+                containsString("tag=c"),
+            )))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"tag":["a","b","c"]}""")
+            server.verify()
+        }
+
+        @Test
+        fun `GET path param is consumed and not duplicated as query`() {
+            val operation = Operation().apply {
+                operationId = "get_thing"
+                addParametersItem(
+                    Parameter().apply {
+                        name = "id"
+                        `in` = "path"
+                        required = true
+                        schema = StringSchema()
+                    },
+                )
+            }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/things/{id}",
+                operation = operation,
+            )
+            server.expect(requestTo("https://api.example.com/things/42?extra=foo"))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"id":"42","extra":"foo"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `POST does not forward undeclared keys as query`() {
+            // Permissive forwarding only kicks in for GET/DELETE — POST/PUT/PATCH
+            // have a request body and undeclared keys are unsafe to coerce.
+            val operation = Operation().apply {
+                operationId = "create_thing"
+                requestBody = RequestBody().apply {
+                    content = io.swagger.v3.oas.models.media.Content().addMediaType(
+                        "application/json",
+                        io.swagger.v3.oas.models.media.MediaType().schema(
+                            io.swagger.v3.oas.models.media.ObjectSchema().apply {
+                                properties = mapOf("name" to StringSchema())
+                            },
+                        ),
+                    )
+                }
+            }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.POST,
+                path = "/things",
+                operation = operation,
+            )
+            server.expect(requestTo("https://api.example.com/things"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess("""{"id":1}""", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"name":"foo"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `null-valued args are not forwarded`() {
+            val operation = Operation().apply { operationId = "list" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/list",
+                operation = operation,
+            )
+            server.expect(requestTo("https://api.example.com/list?keep=yes"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"keep":"yes","drop":null}""")
+            server.verify()
+        }
+    }
+
+    // ======================================================================
+    // Empty 200 body produces a useful error
+    // (regression: empty Tool.Result.Text caused the model to loop because
+    // it saw "" as the result with no signal that something was wrong.)
+    // ======================================================================
+
+    @Nested
+    inner class EmptyResponseBodyHandling {
+
+        @Test
+        fun `empty 200 body returns error not empty text`() {
+            // Real-world case: open-meteo returns 200 with empty body when
+            // required query params are missing.
+            val operation = Operation().apply { operationId = "get_v1_forecast" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/v1/forecast",
+                operation = operation,
+                baseUrl = "https://api.open-meteo.com",
+            )
+            server.expect(requestTo(containsString("https://api.open-meteo.com/v1/forecast")))
+                .andRespond(withSuccess("", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("{}")
+            val error = assertInstanceOf(Tool.Result.Error::class.java, result)
+            assertTrue(
+                error.message.contains("Empty response body", ignoreCase = true),
+                "got: ${error.message}",
+            )
+            assertTrue(error.message.contains("/v1/forecast"), "should mention path, got: ${error.message}")
+        }
+
+        @Test
+        fun `whitespace-only 200 body returns error`() {
+            val operation = Operation().apply { operationId = "list" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/list",
+                operation = operation,
+            )
+            server.expect(requestTo(containsString("/list")))
+                .andRespond(withSuccess("   \n\t  \n", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("{}")
+            assertInstanceOf(Tool.Result.Error::class.java, result)
+        }
+
+        @Test
+        fun `non-empty 200 body returns text result`() {
+            val operation = Operation().apply { operationId = "list" }
+            val (tool, server) = createToolWithMock(
+                method = PathItem.HttpMethod.GET,
+                path = "/list",
+                operation = operation,
+            )
+            server.expect(requestTo(containsString("/list")))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("{}")
+            val text = assertInstanceOf(Tool.Result.Text::class.java, result)
+            assertTrue(text.content.contains("ok"))
         }
     }
 

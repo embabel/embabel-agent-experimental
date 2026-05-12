@@ -1,0 +1,49 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Multi-Host API",
+    "description": "Fixture for OpenAPI 3 servers precedence: operation > path > spec",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {"url": "https://default.example.com"}
+  ],
+  "paths": {
+    "/spec-host": {
+      "get": {
+        "operationId": "specHost",
+        "summary": "Op inherits spec-level server",
+        "tags": ["routing"],
+        "responses": {"200": {"description": "ok"}}
+      }
+    },
+    "/path-host": {
+      "servers": [{"url": "https://path.example.com"}],
+      "get": {
+        "operationId": "pathHost",
+        "summary": "Op inherits path-level server",
+        "tags": ["routing"],
+        "responses": {"200": {"description": "ok"}}
+      }
+    },
+    "/op-host": {
+      "servers": [{"url": "https://path.example.com"}],
+      "get": {
+        "operationId": "opHost",
+        "summary": "Op overrides path with its own server",
+        "servers": [{"url": "https://op.example.com"}],
+        "tags": ["routing"],
+        "responses": {"200": {"description": "ok"}}
+      }
+    },
+    "/op-host-no-path": {
+      "get": {
+        "operationId": "opHostNoPath",
+        "summary": "Op overrides spec directly (no path-level server)",
+        "servers": [{"url": "https://op2.example.com"}],
+        "tags": ["routing"],
+        "responses": {"200": {"description": "ok"}}
+      }
+    }
+  }
+}

@@ -275,6 +275,38 @@ class OpenApiLearnerTest {
         assertTrue(outputSchema.contains("\"name\""))
     }
 
+    // --- OpenAPI 3 servers precedence (operation > path > spec) ---
+
+    private val multiHostSpec =
+        javaClass.classLoader.getResource("multi-host-servers.json")!!.toString()
+
+    private fun multiHostTool(name: String): OpenApiOperationTool {
+        val tool = learner.learn(multiHostSpec).create()
+        return collectAllLeafTools(tool)
+            .filterIsInstance<OpenApiOperationTool>()
+            .first { it.definition.name == name }
+    }
+
+    @Test
+    fun `operation with no overrides uses spec-level server`() {
+        assertEquals("https://default.example.com", multiHostTool("specHost").baseUrl)
+    }
+
+    @Test
+    fun `operation under a path-level server inherits the path server`() {
+        assertEquals("https://path.example.com", multiHostTool("pathHost").baseUrl)
+    }
+
+    @Test
+    fun `operation-level server overrides path-level server`() {
+        assertEquals("https://op.example.com", multiHostTool("opHost").baseUrl)
+    }
+
+    @Test
+    fun `operation-level server overrides spec-level server when no path-level present`() {
+        assertEquals("https://op2.example.com", multiHostTool("opHostNoPath").baseUrl)
+    }
+
     // --- Helpers ---
 
     private fun collectAllLeafTools(tool: Tool): List<Tool> {

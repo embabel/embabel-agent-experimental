@@ -15,6 +15,8 @@
  */
 package com.embabel.agent.sandbox
 
+import com.embabel.agent.sandbox.docker.DockerExecutor
+
 /**
  * Declarative sandbox configuration for agent executors.
  *

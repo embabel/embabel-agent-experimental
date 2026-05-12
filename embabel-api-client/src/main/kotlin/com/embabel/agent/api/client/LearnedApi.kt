@@ -15,7 +15,9 @@
  */
 package com.embabel.agent.api.client
 
+import com.embabel.agent.api.client.model.toDataDictionary
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
+import com.embabel.agent.core.DataDictionary
 import com.embabel.common.core.types.Timestamped
 import com.fasterxml.jackson.annotation.JsonIgnore
 import java.time.Instant
@@ -53,4 +55,23 @@ data class LearnedApi(
      */
     fun create(credentialStore: CredentialStore): ProgressiveTool =
         factory(credentialStore.credentialsFor(name))
+
+    /**
+     * Embabel-typed projection of this API's named types
+     * (`components/schemas` for OpenAPI, root types for GraphQL). Returns
+     * `null` for spec types whose [LearnedApiSpec.toModel] returns null
+     * (currently GraphQL until its model builder lands).
+     *
+     * The dictionary's name matches this [LearnedApi.name], so consumers
+     * stitching multiple sources together can keep type namespaces clean
+     * (`Map<String, DataDictionary>` keyed by source name).
+     *
+     * Computed lazily from [spec] and cached for the lifetime of this
+     * instance. Re-learning produces a new [LearnedApi] with a fresh
+     * dictionary.
+     */
+    @get:JsonIgnore
+    val dataDictionary: DataDictionary? by lazy {
+        spec?.toModel()?.toDataDictionary()
+    }
 }

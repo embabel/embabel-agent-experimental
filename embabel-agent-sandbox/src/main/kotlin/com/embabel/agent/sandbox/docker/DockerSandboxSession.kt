@@ -13,8 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.embabel.agent.sandbox
+package com.embabel.agent.sandbox.docker
 
+import com.embabel.agent.sandbox.ExecutionRequest
+import com.embabel.agent.sandbox.ExecutionResult
+import com.embabel.agent.sandbox.SandboxConfig
+import com.embabel.agent.sandbox.SandboxSession
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
 import java.time.Instant
@@ -41,6 +45,7 @@ class DockerSandboxSession(
     override val config: SandboxConfig,
     override val owner: String? = null,
     val ttl: Duration,
+    override val metadata: Map<String, String> = emptyMap(),
 ) : SandboxSession {
 
     private val logger = LoggerFactory.getLogger(DockerSandboxSession::class.java)
@@ -80,6 +85,18 @@ class DockerSandboxSession(
             "docker", "run", "-d",
             "--name", containerName,
         )
+
+        // Mirror caller-supplied metadata to docker --label so it's queryable
+        // via `docker ps --filter label=k=v`. Semantics live with the caller
+        // — typical uses include per-JVM ownership tagging, request id for
+        // diagnostics, tenant grouping. Validate keys early to surface
+        // mistakes on the Kotlin side rather than as cryptic docker errors.
+        for ((k, v) in metadata) {
+            require(k.isNotBlank() && !k.contains('=') && !k.contains(' ')) {
+                "Invalid metadata key '$k' — must be non-blank, no '=' or whitespace"
+            }
+            cmd.addAll(listOf("--label", "$k=$v"))
+        }
 
         config.memory.let { cmd.addAll(listOf("--memory", it)) }
         config.cpus.let { cmd.addAll(listOf("--cpus", it)) }

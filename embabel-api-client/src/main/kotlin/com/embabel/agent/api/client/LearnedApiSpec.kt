@@ -82,12 +82,22 @@ sealed interface LearnedApiSpec {
             operationIds: Set<String>?,
             nameOverride: String?,
         ): (ApiCredentials) -> ProgressiveTool = { credentials ->
-            val openApi = OpenApiLearner.parseSpec(source, rawSpec)
+            // Use the ref-preserving parse so each `OpenApiOperationTool`
+            // can emit `{"$ref": "#/$defs/Foo"}` markers in its output
+            // schema instead of inlining the named target. The runtime
+            // path derefs via `componentsSchemas` at call time, so request
+            // construction still works against the named-component shape.
+            val openApi = OpenApiLearner.parseSpecPreservingRefs(source, rawSpec)
             OpenApiLearner.buildTool(source, openApi, credentials, tags, operationIds, nameOverride)
         }
 
         override fun toModel(): ApiModel {
-            val openApi = OpenApiLearner.parseSpec(source, rawSpec)
+            // Use the ref-preserving parse so the IR (and the DataDictionary
+            // it feeds) carries cross-type links via [ApiSchema.Ref].
+            // The runtime tool path goes through [OpenApiLearner.buildTool]
+            // which still uses the fully-resolved [OpenApiLearner.parseSpec]
+            // and is unaffected.
+            val openApi = OpenApiLearner.parseSpecPreservingRefs(source, rawSpec)
             return OpenApiLearner.buildModel(source, openApi)
         }
     }
