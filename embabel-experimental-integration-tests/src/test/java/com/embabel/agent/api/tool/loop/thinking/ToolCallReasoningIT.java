@@ -219,22 +219,22 @@ class ToolCallReasoningIT extends AbstractToolLoopTest {
 
         // Add system messages before each LLM call
         var systemMessageTransformer = new SystemMessageTransformer(
-                "You are a helpful parking decision assistant. Be concise and practical.",
+                "You are a helpful decision assistant. Be concise and practical.",
                 """
                                 You MUST always emit exactly one XML reasoning block before providing your final answer:
 
                                     <tool_use_reasoning>
-                                    - Need: why this specific tool is necessary to improve the decision
-                                    - Selected tool: which single tool to call
-                                    - Alternatives: other tools or approaches considered but not selected
-                                    - Expected value: what the tool result will reveal or confirm
+                                    Explain:
+                                    - Key constraints affecting the decision
+                                    - Risk factors to consider
+                                    - Trade-offs between available options
+                                    - Tool call confidence score in format [confidence=CONFIDENCE-VALUE]
                                     </tool_use_reasoning>
 
                                     Tool-use rules:
                                     - Call at most ONE tool.
-                                    - Call at least one tool to probe and verify your reasoning.
-                                    - Choose the single most valuable tool for the decision.
-                                    - Keep reasoning concise and decision-focused.
+                                    - Only call a tool if materially needed for the decision.
+                                    - Keep reasoning concise (3-5 bullet points).
                                     - Never copy <tool_use_reasoning> into the final structured object.
                         """
         );

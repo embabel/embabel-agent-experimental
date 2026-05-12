@@ -23,6 +23,7 @@ import com.embabel.agent.api.tool.loop.testing.AbstractToolLoopTest;
 import com.embabel.agent.spi.loop.EmptyResponsePolicy;
 import com.embabel.agent.spi.loop.ExitOnEmptyPolicy;
 import com.embabel.agent.spi.loop.ImmediateThrowPolicy;
+import com.embabel.agent.spi.loop.RetryWithFeedbackPolicy;
 import com.embabel.agent.spi.loop.ToolInjectionStrategy;
 import com.embabel.agent.spi.loop.support.DefaultToolLoop;
 import com.embabel.agent.spi.tool.loop.OpenAiLlmMessageSender;
@@ -65,8 +66,8 @@ class OpenAiToolLoopIT extends AbstractToolLoopTest {
             return; // Skip setup if no API key
         }
         openAIClient = OpenAIOkHttpClient.builder()
-            .apiKey(apiKey)
-            .build();
+                .apiKey(apiKey)
+                .build();
     }
 
     @Test
@@ -79,7 +80,7 @@ class OpenAiToolLoopIT extends AbstractToolLoopTest {
         // Create tools for fetching restaurant menus
         var tools = createAllMenuTools();
         logger.info("Created {} menu tools: {}", tools.size(),
-            tools.stream().map(t -> t.getDefinition().getName()).toList());
+                tools.stream().map(t -> t.getDefinition().getName()).toList());
 
         // Create OpenAI SDK-based message sender
         var messageSender = new OpenAiLlmMessageSender(openAIClient);
@@ -103,60 +104,60 @@ class OpenAiToolLoopIT extends AbstractToolLoopTest {
             List.of(),  // toolCallInspectors (empty for non-streaming)
             ToolCallContext.EMPTY,
             ImmediateThrowPolicy.INSTANCE,
-                ExitOnEmptyPolicy.INSTANCE
+            ExitOnEmptyPolicy.INSTANCE
         );
 
         var toolNames = tools.stream()
-            .map(t -> t.getDefinition().getName())
-            .toList();
+                .map(t -> t.getDefinition().getName())
+                .toList();
 
         var systemPrompt = "You are a helpful assistant that recommends restaurants.";
 
         var userPrompt = """
-            I'm looking for an Italian restaurant near the Upper East Side in NYC.
-
-            You have access to these tools to fetch restaurant menus:
-            %s
-
-            Please fetch the menus and recommend the best restaurant for a romantic dinner.
-            Respond with JSON: {"recommendedRestaurant": "name", "reasoning": "why", "menusAnalyzed": N}
-            """.formatted(String.join(", ", toolNames));
+                I'm looking for an Italian restaurant near the Upper East Side in NYC.
+                
+                You have access to these tools to fetch restaurant menus:
+                %s
+                
+                Please fetch the menus and recommend the best restaurant for a romantic dinner.
+                Respond with JSON: {"recommendedRestaurant": "name", "reasoning": "why", "menusAnalyzed": N}
+                """.formatted(String.join(", ", toolNames));
 
         var startTime = System.currentTimeMillis();
 
         // Execute with OpenAI SDK-powered tool loop
         var result = toolLoop.execute(
-            List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)),
-            tools,
-            response -> response  // Simple pass-through parser
+                List.of(new SystemMessage(systemPrompt), new UserMessage(userPrompt)),
+                tools,
+                response -> response  // Simple pass-through parser
         );
 
         var elapsed = System.currentTimeMillis() - startTime;
 
         // Log results
         logger.info("""
-
-            ========== OPENAI DIRECT SDK RESULT ({} ms) ==========
-            Final response: {}
-            Iterations: {}
-
-            Callback stats:
-              beforeLlmCall: {}
-              afterToolResult: {}
-              Tools invoked: {}
-            """,
-            elapsed,
-            result.getResult().substring(0, Math.min(1500, result.getResult().length())),
-            result.getTotalIterations(),
-            callbackTracker.beforeLlmCallCount.get(),
-            callbackTracker.afterToolResultCount.get(),
-            callbackTracker.toolsInvoked
+                        
+                        ========== OPENAI DIRECT SDK RESULT ({} ms) ==========
+                        Final response: {}
+                        Iterations: {}
+                        
+                        Callback stats:
+                          beforeLlmCall: {}
+                          afterToolResult: {}
+                          Tools invoked: {}
+                        """,
+                elapsed,
+                result.getResult().substring(0, Math.min(1500, result.getResult().length())),
+                result.getTotalIterations(),
+                callbackTracker.beforeLlmCallCount.get(),
+                callbackTracker.afterToolResultCount.get(),
+                callbackTracker.toolsInvoked
         );
 
         // Assertions
         assertTrue(result.getTotalIterations() >= 1, "Should have at least 1 iteration");
         assertTrue(callbackTracker.afterToolResultCount.get() >= 1,
-            "Should invoke at least one tool");
+                "Should invoke at least one tool");
         assertFalse(callbackTracker.toolsInvoked.isEmpty(), "Should track invoked tools");
     }
 
