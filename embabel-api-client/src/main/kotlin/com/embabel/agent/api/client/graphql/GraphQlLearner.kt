@@ -179,6 +179,7 @@ class GraphQlLearner(
                     }
                 }
                 is ApiCredentials.OAuth2 -> builder.defaultHeader("Authorization", "Bearer ${credentials.accessToken}")
+                is ApiCredentials.ClientApp -> {} // App identity is consumed by the token-exchange flow, not API calls.
             }
 
             return builder.build()

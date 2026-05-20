@@ -27,6 +27,24 @@ sealed interface ApiCredentials {
     data class Multiple(val credentials: List<ApiCredentials>) : ApiCredentials
 
     /**
+     * The caller's identity as registered with an OAuth2 provider — the
+     * `client_id` + `client_secret` pair that identifies *which* app is
+     * asking for user tokens. Stored per-provider, distinct from the
+     * per-user [OAuth2] access/refresh tokens issued against it.
+     *
+     * Separating the app's identity from the user's tokens lets the
+     * credential store hold both: pack-declared providers can defer the
+     * `client_id`/`client_secret` lookup to the store (e.g. an encrypted
+     * wallet) instead of a plaintext config file. Each user/installation
+     * registers their own app with the provider; nothing about this pair
+     * is shared across users.
+     */
+    data class ClientApp(
+        val clientId: String,
+        val clientSecret: String,
+    ) : ApiCredentials
+
+    /**
      * OAuth2 credentials with access token, refresh token, and provider config.
      * The [accessToken] is used for API calls. When it expires, the [refreshToken]
      * is used to obtain a new one via the [tokenUrl].
