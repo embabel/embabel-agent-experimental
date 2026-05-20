@@ -221,21 +221,43 @@ class ToolCallReasoningIT extends AbstractToolLoopTest {
         var systemMessageTransformer = new SystemMessageTransformer(
                 "You are a helpful decision assistant. Be concise and practical.",
                 """
-                                You MUST always emit exactly one XML reasoning block before providing your final answer:
+                                CRITICAL WORKFLOW - Two-phase decision process:
+
+                                === PHASE 1: Tool Selection (First Response) ===
+
+                                1. For EACH tool you plan to call, emit a SEPARATE <tool_use_reasoning> block:
 
                                     <tool_use_reasoning>
-                                    Explain:
-                                    - Key constraints affecting the decision
-                                    - Risk factors to consider
-                                    - Trade-offs between available options
-                                    - Tool call confidence score in format [confidence=CONFIDENCE-VALUE]
+                                    Tool: [TOOL_NAME]
+                                    Why THIS tool: [explain why this specific tool is needed]
+                                    Information expected: [what this tool will reveal]
+                                    Advantage over alternatives: [why this tool vs others]
+                                    Confidence: [confidence=X.X]
                                     </tool_use_reasoning>
 
-                                    Tool-use rules:
-                                    - Call at most ONE tool.
-                                    - Only call a tool if materially needed for the decision.
-                                    - Keep reasoning concise (3-5 bullet points).
-                                    - Never copy <tool_use_reasoning> into the final structured object.
+                                    If calling 2 tools, emit 2 separate blocks. If calling 3 tools, emit 3 separate blocks.
+
+                                2. Then call the tool(s) to probe real-time conditions
+                                    - You MUST call at least one tool. Do NOT skip it.
+                                    - Tools are PROBES for information gathering, not final decisions.
+                                    - Do NOT provide the final answer yet.
+
+                                === PHASE 2: Final Decision (Second Response, after receiving tool results) ===
+
+                                1. Emit final decision reasoning:
+                                    <final_decision_reasoning>
+                                    Explain:
+                                    - What each tool probe revealed
+                                    - How the probe results informed your analysis
+                                    - Why you chose this option based on probe data and constraints
+                                    - Confidence in final recommendation in format [confidence=CONFIDENCE-VALUE]
+                                    </final_decision_reasoning>
+
+                                2. Then provide the final structured output
+                                    - Your final recommendation may differ from the options you probed.
+                                    - Never copy reasoning blocks into the final structured object.
+
+                                REMINDER: One <tool_use_reasoning> block per tool call. Multiple tools = multiple blocks. Emit reasoning in BOTH phases.
                         """
         );
 
@@ -269,7 +291,8 @@ class ToolCallReasoningIT extends AbstractToolLoopTest {
                           - trade-offs between street, metered, and garage parking
                 
                           Recommend the best parking option.
-                          Use tools $s only if they materially improve the decision.
+                
+                          Available tools: %s
                 
                 
                 """.formatted(String.join(", ", toolNames));
@@ -318,6 +341,157 @@ class ToolCallReasoningIT extends AbstractToolLoopTest {
         // Verify tool names were captured
         assertFalse(callbackTracker.toolsInvoked.isEmpty(), "Should track invoked tools");
         logger.info("Tools invoked: {}", callbackTracker.toolsInvoked);
+    }
+
+    /**
+     * Test with multiple tool probes to verify thinking blocks accumulate correctly
+     * across multiple tool calls (either in same iteration or across iterations).
+     * <p>
+     * This test investigates:
+     * - Whether multiple tools are called in the same iteration or separate iterations
+     * - Whether multiple tool calls in the same iteration share the same AssistantMessage
+     * - Whether thinking blocks accumulate correctly in both scenarios
+     */
+    @Test
+    void parkingDecisionMakerWithMultiProbes() {
+        // Create Parking Options Tool
+        var tools = new ParkingTooling();
+        var loggingInspector = createLoggingInspector();
+        var callbackTracker = new CallbackTracker();
+
+        var systemMessageTransformer = new SystemMessageTransformer(
+                "You are a helpful decision assistant. Be concise and practical.",
+                """
+                                CRITICAL WORKFLOW - Two-phase decision process:
+
+                                === PHASE 1: Tool Selection (First Response) ===
+
+                                1. For EACH tool you plan to call, emit a SEPARATE <tool_use_reasoning> block:
+
+                                    <tool_use_reasoning>
+                                    Tool: [TOOL_NAME]
+                                    Why THIS tool: [explain why this specific tool is needed]
+                                    Information expected: [what this tool will reveal]
+                                    Advantage over alternatives: [why this tool vs others]
+                                    Confidence: [confidence=X.X]
+                                    </tool_use_reasoning>
+
+                                    Since you must call at least 2 tools, you must emit at least 2 separate blocks.
+
+                                2. Call AT LEAST TWO tools to gather comprehensive information
+                                    - You MUST call at least 2 tools to probe different aspects.
+                                    - Tools are PROBES for information gathering, not final decisions.
+                                    - Multiple probes provide better decision quality.
+
+                                === PHASE 2: Final Decision (After receiving tool results) ===
+
+                                1. Emit final decision reasoning:
+                                    <final_decision_reasoning>
+                                    Explain:
+                                    - What each tool probe revealed
+                                    - How the probe results informed your analysis
+                                    - Why you chose this option based on probe data and constraints
+                                    - Confidence in final recommendation in format [confidence=CONFIDENCE-VALUE]
+                                    </final_decision_reasoning>
+
+                                2. Then provide the final structured output
+                                    - Your final recommendation should synthesize insights from multiple probes.
+                                    - Never copy reasoning blocks into the final structured object.
+
+                                REMINDER: One <tool_use_reasoning> block per tool call. At least 2 tools = at least 2 blocks. Emit reasoning in BOTH phases.
+                        """
+        );
+
+        String prompt = """
+                
+                          Scenario:
+                          An advisor is driving to a client meeting in Midtown Manhattan.
+                
+                          Constraints:
+                          - 30 minutes remain before the meeting starts
+                          - arriving late is not acceptable
+                          - the meeting is expected to last about 3 hours
+                
+                          Parking options:
+                          - Street parking: free, but uncertain
+                          - Metered parking: $5 per hour, typically limited to 2 hours
+                          - Garage parking: $30 per hour, guaranteed availability
+                
+                          Important decision factors:
+                          - available time before the meeting
+                          - risk of arriving late
+                          - trade-offs between street, metered, and garage parking
+                
+                          Recommend the best parking option.
+                
+                          Available tools: %s
+                
+                
+                """.formatted(String.join(", ", List.of("findStreetParking", "findMeterParking", "reserveGarage")));
+
+
+
+        long start = System.currentTimeMillis();
+        ThinkingResponse<ParkingRecommendation> result = ai.withDefaultLlm()
+                .withToolObject(tools)
+                .withToolLoopInspectors(callbackTracker, loggingInspector)
+                .withToolLoopTransformers(systemMessageTransformer)
+                .thinking().createObject(prompt, ParkingRecommendation.class);
+        long elapsed = System.currentTimeMillis() - start;
+
+        logger.info("""
+                        
+                        ========== RESULT ({} ms) ==========
+                        Recommended: {}
+                        Reasoning: {}
+                        
+                        Callback stats:
+                          beforeLlmCall: {}
+                          afterLlmCall: {}
+                          afterToolResult: {}
+                        
+                        """,
+                elapsed,
+                result.getResult(),
+                result.getThinkingBlocks(),
+                callbackTracker.beforeLlmCallCount.get(),
+                callbackTracker.afterLlmCallCount.get(),
+                callbackTracker.afterToolResultCount.get()
+        );
+
+        // Assertions
+
+        // Verify at least 2 tools were called
+        assertTrue(callbackTracker.toolsInvoked.size() >= 2,
+                "Should invoke at least 2 tools for comprehensive probing, invoked: " + callbackTracker.toolsInvoked);
+        logger.info("Tools invoked: {}", callbackTracker.toolsInvoked);
+
+        // Verify thinking blocks were accumulated
+        assertFalse(result.getThinkingBlocks().isEmpty(),
+                "Should have accumulated thinking blocks");
+
+        // Log analysis of tool call pattern
+        int totalIterations = callbackTracker.beforeLlmCallCount.get();
+        int toolsCalled = callbackTracker.toolsInvoked.size();
+        int toolResultCallbacks = callbackTracker.afterToolResultCount.get();
+
+        logger.info("=== TOOL CALL PATTERN ANALYSIS ===");
+        logger.info("Total LLM iterations: {}", totalIterations);
+        logger.info("Total tools called: {}", toolsCalled);
+        logger.info("Tool result callbacks: {}", toolResultCallbacks);
+
+        if (toolResultCallbacks == toolsCalled && totalIterations < toolsCalled + 1) {
+            logger.info("PATTERN: Multiple tools called in SAME iteration (parallel tool calls)");
+        } else if (totalIterations >= toolsCalled) {
+            logger.info("PATTERN: Tools called across SEPARATE iterations (sequential tool calls)");
+        }
+
+        logger.info("Thinking blocks captured: {}", result.getThinkingBlocks().size());
+        for (int i = 0; i < result.getThinkingBlocks().size(); i++) {
+            var block = result.getThinkingBlocks().get(i);
+            logger.info("  Block {}: tagType={}, tagValue={}, contentLength={}",
+                    i + 1, block.getTagType(), block.getTagValue(), block.getContent().length());
+        }
     }
 
 
