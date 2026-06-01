@@ -132,8 +132,12 @@ class OpenApiOperationTool(
             }
             Tool.Result.text(responseBody)
         } catch (e: RestClientResponseException) {
-            val errorBody = e.responseBodyAsString
-            val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path after ${System.currentTimeMillis() - started}ms: ${errorBody.take(200)}"
+            // Keep enough of the body to carry the API's own diagnostic — e.g.
+            // Google's `errors[].location`/`reason` naming the bad parameter,
+            // which a 200-char cut used to slice off mid-field. Both the log
+            // and the LLM-visible tool error get it, so the model can correct.
+            val errorBody = e.responseBodyAsString.take(2000)
+            val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path after ${System.currentTimeMillis() - started}ms: $errorBody"
             logger.warn(message)
             Tool.Result.error(message, e)
         } catch (e: Exception) {
