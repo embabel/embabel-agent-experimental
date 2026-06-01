@@ -280,7 +280,11 @@ class OpenApiOperationTool(
             }
         }
 
-        return builder.build().toUriString()
+        // `build()` alone does NOT percent-encode — a query value like
+        // "Pain and Glory" would go out as a raw space (`?t=Pain and Glory`),
+        // and `&`/`?`/`#`/non-ASCII in a value would corrupt the query. Encode
+        // explicitly so query (and path) values are URL-safe.
+        return builder.encode().build().toUriString()
     }
 
     private fun executeRequest(uri: String, body: Any?): ResponseEntity<String> {
