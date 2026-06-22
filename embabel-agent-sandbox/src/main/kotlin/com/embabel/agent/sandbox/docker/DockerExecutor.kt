@@ -138,6 +138,7 @@ class DockerExecutor(
     }
 
     override fun execute(request: ExecutionRequest): ExecutionResult {
+        val started = kotlin.time.TimeSource.Monotonic.markNow()
         validate(request)?.let { return it }
 
         // Create temp directories
@@ -236,6 +237,7 @@ class DockerExecutor(
             return ExecutionResult.Failed(
                 error = "Docker execution failed: ${e.message}",
                 cause = e,
+                duration = started.elapsedNow(),
             )
         }
     }

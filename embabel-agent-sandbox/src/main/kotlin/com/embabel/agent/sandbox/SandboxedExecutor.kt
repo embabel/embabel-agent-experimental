@@ -224,6 +224,14 @@ data class ExecutionRequest(
 sealed interface ExecutionResult {
 
     /**
+     * Wall-clock time the execution took, regardless of outcome. Present on EVERY result —
+     * a denial still spends validation time, a failed-to-start still spends setup time — so
+     * callers (logging, the Cypher console, metrics) report it uniformly. Defaults to
+     * [Duration.ZERO] on the cases with no meaningful elapsed to report.
+     */
+    val duration: Duration
+
+    /**
      * Successful execution (process completed, regardless of exit code).
      *
      * @param exitCode the process exit code
@@ -236,7 +244,7 @@ sealed interface ExecutionResult {
         val exitCode: Int,
         val stdout: String,
         val stderr: String,
-        val duration: Duration,
+        override val duration: Duration,
         val artifacts: List<ExecutionArtifact> = emptyList(),
     ) : ExecutionResult {
 
@@ -252,7 +260,7 @@ sealed interface ExecutionResult {
      */
     data class TimedOut(
         val partialStderr: String? = null,
-        val duration: Duration,
+        override val duration: Duration,
     ) : ExecutionResult
 
     /**
@@ -260,19 +268,23 @@ sealed interface ExecutionResult {
      *
      * @param error the error message
      * @param cause the underlying exception, if any
+     * @param duration how long before the failure (zero if it failed before any work)
      */
     data class Failed(
         val error: String,
         val cause: Throwable? = null,
+        override val duration: Duration = Duration.ZERO,
     ) : ExecutionResult
 
     /**
      * Execution was denied (validation failed or not permitted).
      *
      * @param reason why execution was denied
+     * @param duration how long validation took (usually near-zero)
      */
     data class Denied(
         val reason: String,
+        override val duration: Duration = Duration.ZERO,
     ) : ExecutionResult
 }
 
