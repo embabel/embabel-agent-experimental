@@ -29,12 +29,12 @@ import com.embabel.agent.spi.loop.support.DefaultToolLoop;
 import com.embabel.agent.spi.tool.loop.OpenAiLlmMessageSender;
 import com.embabel.chat.SystemMessage;
 import com.embabel.chat.UserMessage;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -95,7 +95,7 @@ class OpenAiToolLoopIT extends AbstractToolLoopTest {
         // Create the tool loop with OpenAI backend
         var toolLoop = new DefaultToolLoop(
             messageSender,
-            new ObjectMapper(),
+            JsonMapper.builder().build(),
             ToolInjectionStrategy.Companion.getNONE(),  // no injection strategy
             20,    // max iterations
             null,  // no tool decorator
