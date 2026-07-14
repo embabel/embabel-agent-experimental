@@ -15,7 +15,7 @@
     <packaging>pom</packaging>
 
     <properties>
-        <revision>1.0.0-RC1-SNAPSHOT</revision>
+        <revision>1.0.0-SNAPSHOT</revision>
     </properties>
     <name>Embabel Example Agent Experimental</name>
     <description>Example Agentic Experimental Models Incubation</description>
