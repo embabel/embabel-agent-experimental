@@ -553,6 +553,59 @@ class OpenApiOperationToolTest {
         }
 
         @Test
+        fun `GET query value with spaces reaches the server percent-encoded exactly once`() {
+            // GitHub-search shape (embabel/me#459): a multi-term `q` must arrive as
+            // q=repo:embabel/me%20is:issue — not raw spaces (an invalid request line)
+            // and not double-encoded %2520 (the server then searches a literal
+            // "repo:embabel/me%20is:issue" and 422s or silently matches nothing).
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/search/issues",
+                operation = Operation().apply {
+                    operationId = "searchIssuesAndPullRequests"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "q"
+                            `in` = "query"
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/search/issues?q=repo:embabel/me%20is:issue%20is:open"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""{"total_count": 3}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"q": "repo:embabel/me is:issue is:open"}""")
+            assertIsText(result, """{"total_count": 3}""")
+            server.verify()
+        }
+
+        @Test
+        fun `GET query value with reserved characters is encoded, not corrupted`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/search/issues",
+                operation = Operation().apply {
+                    operationId = "searchIssuesAndPullRequests"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "q"
+                            `in` = "query"
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            // `&` and `#` in a VALUE must not terminate the query string or the URI.
+            server.expect(requestTo("https://api.example.com/search/issues?q=C%23%20%26%20me"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"q": "C# & me"}""")
+            assertIsText(result, "[]")
+            server.verify()
+        }
+
+        @Test
         fun `GET with integer query parameter`() {
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.GET, "/pets",

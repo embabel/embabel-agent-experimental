@@ -32,6 +32,7 @@ import org.springframework.util.MultiValueMap
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientResponseException
 import org.springframework.web.util.UriComponentsBuilder
+import java.net.URI
 
 /**
  * A [Tool] that wraps a single OpenAPI operation, executing it via [RestClient].
@@ -99,7 +100,7 @@ class OpenApiOperationTool(
             val body = resolveBody(params)
 
             val uri = buildUri(resolvedPath, queryParams)
-            uriForLog = uri
+            uriForLog = uri.toString()
 
             logger.info("Calling {} {} (baseUrl={})", httpMethod, uri, baseUrl)
 
@@ -274,7 +275,7 @@ class OpenApiOperationTool(
         }
     }
 
-    private fun buildUri(resolvedPath: String, queryParams: Map<String, List<String>>): String {
+    private fun buildUri(resolvedPath: String, queryParams: Map<String, List<String>>): URI {
         val builder = UriComponentsBuilder
             .fromUriString(baseUrl.trimEnd('/') + resolvedPath)
 
@@ -288,10 +289,16 @@ class OpenApiOperationTool(
         // "Pain and Glory" would go out as a raw space (`?t=Pain and Glory`),
         // and `&`/`?`/`#`/non-ASCII in a value would corrupt the query. Encode
         // explicitly so query (and path) values are URL-safe.
-        return builder.encode().build().toUriString()
+        //
+        // Return a java.net.URI, NOT a String: RestClient.uri(String) treats a
+        // string as a URI *template* and encodes it AGAIN, turning our %20 into
+        // %2520 — the server then decodes to a literal "%20" inside the value
+        // (a multi-term GitHub `q` searched as one nonsense token: 422 or a
+        // silent zero, embabel/me#459). RestClient.uri(URI) is used verbatim.
+        return builder.encode().build().toUri()
     }
 
-    private fun executeRequest(uri: String, body: Any?): ResponseEntity<String> {
+    private fun executeRequest(uri: URI, body: Any?): ResponseEntity<String> {
         return when (httpMethod) {
             PathItem.HttpMethod.GET -> restClient.get().uri(uri)
                 .retrieve().toEntity(String::class.java)
