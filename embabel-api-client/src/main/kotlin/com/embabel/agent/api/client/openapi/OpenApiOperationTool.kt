@@ -107,7 +107,7 @@ class OpenApiOperationTool(
             val response = executeRequest(uri, body)
             val elapsed = System.currentTimeMillis() - started
             val status = response.statusCode.value()
-            logger.info("Completed {} {} -> {} in {}ms", httpMethod, uri, status, elapsed)
+            logger.info("Completed {} {} -> {} in {}ms", httpMethod, uri, status, "%,d".format(elapsed))
             val responseBody = response.body
             if (responseBody.isNullOrBlank()) {
                 // Empty body handling differs by method:
@@ -138,14 +138,15 @@ class OpenApiOperationTool(
             // which a 200-char cut used to slice off mid-field. Both the log
             // and the LLM-visible tool error get it, so the model can correct.
             val errorBody = e.responseBodyAsString.take(2000)
-            val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path after ${System.currentTimeMillis() - started}ms: $errorBody"
+            val elapsed = "%,d".format(System.currentTimeMillis() - started)
+            val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path after ${elapsed}ms: $errorBody"
             logger.warn(message)
             Tool.Result.error(message, e)
         } catch (e: Exception) {
             logger.warn(
                 "Error calling {} {} at {} after {}ms: {} ({})",
                 httpMethod, uriForLog ?: path, baseUrl,
-                System.currentTimeMillis() - started,
+                "%,d".format(System.currentTimeMillis() - started),
                 e.javaClass.simpleName, e.message,
             )
             Tool.Result.error("Error calling $httpMethod $path at $baseUrl: ${e.message}", e)

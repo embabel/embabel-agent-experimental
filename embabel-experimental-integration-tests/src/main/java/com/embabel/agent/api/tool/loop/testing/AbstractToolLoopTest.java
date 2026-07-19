@@ -140,7 +140,8 @@ public abstract class AbstractToolLoopTest {
                 logger.info("[{}] {} START: {}", thread, toolName, menuUrl);
                 var start = System.currentTimeMillis();
                 var result = extractMenuText(menuUrl);
-                logger.info("[{}] {} END: {}ms", thread, toolName, System.currentTimeMillis() - start);
+                logger.info("[{}] {} END: {}ms", thread, toolName,
+                        String.format("%,d", System.currentTimeMillis() - start));
                 return Tool.Result.text(result);
             }
         );
