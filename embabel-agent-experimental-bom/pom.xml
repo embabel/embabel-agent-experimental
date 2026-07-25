@@ -13,7 +13,7 @@
     <packaging>pom</packaging>
 
     <properties>
-        <revision>0.3.5-SNAPSHOT</revision>
+        <revision>1.5.0-SNAPSHOT</revision>
     </properties>
     <name>Embabel Agent Experimental BOM</name>
     <description>Embabel Agent Experimental BOM</description>
