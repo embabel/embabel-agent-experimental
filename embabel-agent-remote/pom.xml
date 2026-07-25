@@ -26,6 +26,14 @@
             <artifactId>embabel-agent-api</artifactId>
         </dependency>
 
+        <!-- Test Dependencies -->
+        <!-- Jackson 2 Kotlin module: used by tests; no longer provided transitively -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>

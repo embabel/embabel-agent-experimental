@@ -15,17 +15,16 @@
  */
 package com.embabel.agent.spec.model
 
-import com.fasterxml.jackson.databind.exc.ValueInstantiationException
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import tools.jackson.databind.exc.ValueInstantiationException
+import tools.jackson.module.kotlin.jacksonObjectMapper
 
 class BackgroundMessageTest {
 
-    private val objectMapper = ObjectMapper().registerKotlinModule()
+    private val objectMapper = jacksonObjectMapper()
 
     @Nested
     inner class ValidPayloads {

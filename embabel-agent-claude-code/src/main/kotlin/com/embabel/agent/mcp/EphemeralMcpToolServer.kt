@@ -17,8 +17,7 @@ package com.embabel.agent.mcp
 
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.spi.support.springai.toSpringToolCallbacks
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper
+import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper
 import io.modelcontextprotocol.server.McpServer
 import io.modelcontextprotocol.server.McpSyncServer
 import io.modelcontextprotocol.server.transport.HttpServletSseServerTransportProvider
@@ -26,6 +25,7 @@ import io.modelcontextprotocol.spec.McpSchema
 import org.apache.catalina.startup.Tomcat
 import org.slf4j.LoggerFactory
 import org.springframework.ai.mcp.McpToolUtils
+import tools.jackson.databind.json.JsonMapper
 import java.net.ServerSocket
 
 /**
@@ -43,7 +43,7 @@ class EphemeralMcpToolServer(
 ) : AutoCloseable {
 
     private val logger = LoggerFactory.getLogger(javaClass)
-    private val jsonMapper = jacksonObjectMapper()
+    private val jsonMapper = JsonMapper.builder().build()
 
     val port: Int = findAvailablePort()
     val url: String = "http://localhost:$port/sse"

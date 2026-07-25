@@ -23,6 +23,8 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.DisabledOnOs
+import org.junit.jupiter.api.condition.OS
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -108,6 +110,10 @@ class DockerSandboxSessionTest {
     }
 
     @Test
+    @DisabledOnOs(
+        OS.WINDOWS,
+        disabledReason = "Windows ProcessBuilder does not escape embedded double quotes in the jq command",
+    )
     fun `installed packages persist across executions`() {
         val netConfig = config.copy(network = true)
         session = DockerSandboxSession(label = "test", config = netConfig, ttl = 1.hours)
