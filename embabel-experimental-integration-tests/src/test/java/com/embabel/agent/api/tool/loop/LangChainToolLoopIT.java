@@ -28,8 +28,8 @@ import com.embabel.agent.spi.loop.support.DefaultToolLoop;
 import com.embabel.agent.spi.tool.loop.LangChain4jLlmMessageSender;
 import com.embabel.chat.SystemMessage;
 import com.embabel.chat.UserMessage;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import tools.jackson.databind.json.JsonMapper;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -93,7 +93,7 @@ class LangChainToolLoopIT extends AbstractToolLoopTest {
         // Create the tool loop with LangChain4j backend
         var toolLoop = new DefaultToolLoop(
              messageSender,
-            new ObjectMapper(),
+            JsonMapper.builder().build(),
             ToolInjectionStrategy.Companion.getNONE(),  // no injection strategy
             20,    // max iterations
             null,  // no tool decorator

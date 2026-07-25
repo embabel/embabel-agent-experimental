@@ -20,6 +20,8 @@ import com.embabel.agent.sandbox.ExecutionRequest
 import com.embabel.agent.sandbox.ExecutionResult
 import com.embabel.agent.sandbox.SandboxConfig
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.DisabledOnOs
+import org.junit.jupiter.api.condition.OS
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
@@ -35,6 +37,7 @@ class ProcessExecutorTest {
     }
 
     @Test
+    @DisabledOnOs(OS.WINDOWS, disabledReason = "Requires Unix commands (echo)")
     fun `executes simple echo command`() {
         val executor = ProcessExecutor()
 
@@ -52,6 +55,7 @@ class ProcessExecutorTest {
     }
 
     @Test
+    @DisabledOnOs(OS.WINDOWS, disabledReason = "Requires Unix commands (sh)")
     fun `captures exit code on failure`() {
         val executor = ProcessExecutor()
 
@@ -68,6 +72,7 @@ class ProcessExecutorTest {
     }
 
     @Test
+    @DisabledOnOs(OS.WINDOWS, disabledReason = "Requires Unix commands (sleep)")
     fun `respects timeout`() {
         val executor = ProcessExecutor()
 
@@ -82,6 +87,7 @@ class ProcessExecutorTest {
     }
 
     @Test
+    @DisabledOnOs(OS.WINDOWS, disabledReason = "Requires Unix commands (sh)")
     fun `passes environment variables`() {
         val executor = ProcessExecutor()
 
@@ -98,6 +104,7 @@ class ProcessExecutorTest {
     }
 
     @Test
+    @DisabledOnOs(OS.WINDOWS, disabledReason = "Requires Unix commands (sh)")
     fun `provides INPUT_DIR and OUTPUT_DIR environment variables`() {
         val executor = ProcessExecutor()
 
@@ -114,6 +121,7 @@ class ProcessExecutorTest {
     }
 
     @Test
+    @DisabledOnOs(OS.WINDOWS, disabledReason = "Requires Unix commands (cat)")
     fun `handles stdin`() {
         val executor = ProcessExecutor()
 

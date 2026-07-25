@@ -100,7 +100,7 @@ class RestServer(
             toAction(
                 actionMetadata = it,
                 domainTypes = domainTypes,
-                objectMapper = agentPlatform.platformServices.objectMapper,
+                objectMapper = objectMapper,
             )
         }
         return AgentScope(
