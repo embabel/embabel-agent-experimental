@@ -80,10 +80,15 @@ class OpenApiLearner(
          * Fetch the raw spec content from a URL or file path.
          */
         internal fun fetchRawSpec(source: String): String {
-            val uri = java.net.URI(source)
-            if (uri.scheme == "file" || uri.scheme == null) {
+            // A Windows absolute path is not a parseable URI: "C:\..." throws
+            // URISyntaxException on the backslash, and "C:/..." parses the drive
+            // letter as a single-character scheme. Treat both as local files, the
+            // same as a scheme-less Unix path.
+            val uri = runCatching { java.net.URI(source) }.getOrNull()
+            val scheme = uri?.scheme
+            if (uri == null || scheme == "file" || scheme == null || scheme.length == 1) {
                 // Local file — read directly
-                val path = if (uri.scheme == "file") java.nio.file.Path.of(uri) else java.nio.file.Path.of(source)
+                val path = if (scheme == "file") java.nio.file.Path.of(uri) else java.nio.file.Path.of(source)
                 return java.nio.file.Files.readString(path)
             }
             val httpClient = java.net.http.HttpClient.newBuilder()
@@ -402,7 +407,11 @@ class OpenApiLearner(
         }
 
         private fun sourceAuthority(source: String): String {
-            val u = java.net.URI(source)
+            // A local spec file (including Windows paths, which don't even parse as
+            // URIs) has no authority to resolve a relative server URL against —
+            // return "" so the relative URL passes through instead of throwing.
+            val u = runCatching { java.net.URI(source) }.getOrNull() ?: return ""
+            if (u.scheme == null || u.authority == null) return ""
             return "${u.scheme}://${u.authority}"
         }
 
