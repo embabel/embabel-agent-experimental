@@ -1497,6 +1497,90 @@ class OpenApiOperationToolTest {
         }
     }
 
+    @Nested
+    inner class HeaderParameterTests {
+
+        private fun headerOp(vararg headers: String) = Operation().apply {
+            operationId = "listPets"
+            parameters = headers.map { h -> Parameter().apply { name = h; `in` = "header" } }
+        }
+
+        @Test
+        fun `declared header parameters are sent as headers, not query params`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets",
+                operation = headerOp("PageSize", "PageNumber"),
+            )
+            server.expect(requestTo("https://api.example.com/pets"))
+                .andExpect(header("PageSize", "400"))
+                .andExpect(header("PageNumber", "1"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"PageSize":400,"PageNumber":1}""")
+            server.verify()
+        }
+
+        /**
+         * The regression that motivated header support: a header value carrying
+         * JSON contains `{`, `"` and `,`. Swept into the query string it makes
+         * URI construction throw `Illegal character in query`, so the request
+         * never leaves the process and the API is unusable through the tool
+         * surface even though the spec described it correctly.
+         */
+        @Test
+        fun `a JSON-valued header does not corrupt the URI`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/OnlineDA",
+                operation = headerOp("filters"),
+            )
+            val filters = """{"filters":{"CouncilName":["Waverley Council"]}}"""
+            server.expect(requestTo("https://api.example.com/OnlineDA"))
+                .andExpect(header("filters", filters))
+                .andRespond(withSuccess("""{"TotalCount":1}""", MediaType.APPLICATION_JSON))
+
+            // The header value is itself JSON, so it is escaped into the argument JSON.
+            val escaped = filters.replace("\"", "\\\"")
+            val result = tool.call("""{"filters":"$escaped"}""")
+            assertFalse(
+                result.toString().contains("Illegal character"),
+                "JSON-valued header must not reach the query string",
+            )
+            server.verify()
+        }
+
+        @Test
+        fun `undeclared arguments are not promoted to headers`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets",
+                operation = headerOp("PageSize"),
+            )
+            // `limit` is undeclared: it stays a query param (permissive
+            // forwarding), and must NOT become a header — otherwise
+            // model-supplied input could set Authorization or Host.
+            server.expect(requestTo("https://api.example.com/pets?limit=5"))
+                .andExpect(header("PageSize", "10"))
+                .andExpect(headerDoesNotExist("limit"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"PageSize":10,"limit":5}""")
+            server.verify()
+        }
+
+        @Test
+        fun `a list-valued header is joined rather than repeated`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets",
+                operation = headerOp("Accept-Kinds"),
+            )
+            server.expect(requestTo("https://api.example.com/pets"))
+                .andExpect(header("Accept-Kinds", "cat,dog"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"Accept-Kinds":["cat","dog"]}""")
+            server.verify()
+        }
+    }
+
     // ======================================================================
     // Spec-based integration tests (petstore-minimal.json)
     // ======================================================================

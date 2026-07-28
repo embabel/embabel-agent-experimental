@@ -97,14 +97,18 @@ class OpenApiOperationTool(
 
             val resolvedPath = resolvePath(path, params)
             val queryParams = resolveQueryParams(params)
+            val headerParams = resolveHeaderParams(params)
             val body = resolveBody(params)
 
             val uri = buildUri(resolvedPath, queryParams)
             uriForLog = uri.toString()
 
-            logger.info("Calling {} {} (baseUrl={})", httpMethod, uri, baseUrl)
+            logger.info(
+                "Calling {} {} (baseUrl={}{})", httpMethod, uri, baseUrl,
+                if (headerParams.isEmpty()) "" else ", headers=${headerParams.keys}",
+            )
 
-            val response = executeRequest(uri, body)
+            val response = executeRequest(uri, body, headerParams)
             val elapsed = System.currentTimeMillis() - started
             val status = response.statusCode.value()
             logger.info("Completed {} {} -> {} in {}ms", httpMethod, uri, status, "%,d".format(elapsed))
@@ -182,6 +186,7 @@ class OpenApiOperationTool(
      */
     private fun resolveQueryParams(params: Map<String, Any?>): Map<String, List<String>> {
         val pathParams = pathParameterNames().toSet()
+        val headerParams = headerParameterNames()
         val queryParamNames = (operation.parameters ?: emptyList())
             .filter { it.`in` == "query" }
             .map { it.name }
@@ -205,6 +210,7 @@ class OpenApiOperationTool(
         return params
             .filter { (k, _) ->
                 k != "body" && k !in pathParams && k !in bodyPropNames &&
+                    k !in headerParams &&
                     (k in queryParamNames || isReadOnly)
             }
             .filter { it.value != null }
@@ -219,6 +225,47 @@ class OpenApiOperationTool(
     private fun pathParameterNames(): List<String> {
         val regex = "\\{([^}]+)}".toRegex()
         return regex.findAll(path).map { it.groupValues[1] }.toList()
+    }
+
+    /**
+     * Names of parameters the spec declares as `in: header`.
+     *
+     * These must be excluded from the query string. The permissive
+     * forwarding rule above (`isReadOnly`) otherwise sweeps every unmatched
+     * argument into the query for GET/DELETE, which for a header parameter
+     * is always wrong and can be fatal: a header value carrying JSON (a
+     * filter object, say) contains `{`, `"` and `,`, and building a URI from
+     * it throws `Illegal character in query`, so the call never leaves the
+     * process. The API is then unusable through the tool surface even though
+     * the spec described it correctly.
+     */
+    private fun headerParameterNames(): Set<String> =
+        (operation.parameters ?: emptyList())
+            .filter { it.`in` == "header" }
+            .map { it.name }
+            .toSet()
+
+    /**
+     * Header values for this call, taken from the caller's argument map by
+     * the names the spec declares as `in: header`.
+     *
+     * Unlike query params this is NOT permissive: only declared header
+     * parameters are forwarded. An undeclared argument is far more likely to
+     * be a query param the spec forgot than a header the caller meant to set,
+     * and silently promoting arbitrary arguments to headers risks setting
+     * `Authorization` or `Host` from model-supplied input.
+     */
+    private fun resolveHeaderParams(params: Map<String, Any?>): Map<String, String> {
+        val declared = headerParameterNames()
+        if (declared.isEmpty()) return emptyMap()
+        return params
+            .filter { (k, v) -> k in declared && v != null }
+            .mapValues { (_, v) ->
+                when (v) {
+                    is Collection<*> -> v.mapNotNull { it?.toString() }.joinToString(",")
+                    else -> v.toString()
+                }
+            }
     }
 
     /**
@@ -299,17 +346,26 @@ class OpenApiOperationTool(
         return builder.encode().build().toUri()
     }
 
-    private fun executeRequest(uri: URI, body: Any?): ResponseEntity<String> {
+    private fun executeRequest(
+        uri: URI,
+        body: Any?,
+        headers: Map<String, String> = emptyMap(),
+    ): ResponseEntity<String> {
+        fun <S : RestClient.RequestHeadersSpec<S>> S.withDeclaredHeaders(): S =
+            also { spec -> headers.forEach { (name, value) -> spec.header(name, value) } }
+
         return when (httpMethod) {
             PathItem.HttpMethod.GET -> restClient.get().uri(uri)
+                .withDeclaredHeaders()
                 .retrieve().toEntity(String::class.java)
 
             PathItem.HttpMethod.DELETE -> restClient.delete().uri(uri)
+                .withDeclaredHeaders()
                 .retrieve().toEntity(String::class.java)
 
-            PathItem.HttpMethod.POST -> executeWithBody(restClient.post().uri(uri), body)
-            PathItem.HttpMethod.PUT -> executeWithBody(restClient.put().uri(uri), body)
-            PathItem.HttpMethod.PATCH -> executeWithBody(restClient.patch().uri(uri), body)
+            PathItem.HttpMethod.POST -> executeWithBody(restClient.post().uri(uri).withDeclaredHeaders(), body)
+            PathItem.HttpMethod.PUT -> executeWithBody(restClient.put().uri(uri).withDeclaredHeaders(), body)
+            PathItem.HttpMethod.PATCH -> executeWithBody(restClient.patch().uri(uri).withDeclaredHeaders(), body)
 
             else -> throw UnsupportedOperationException("HTTP method $httpMethod not supported")
         }
