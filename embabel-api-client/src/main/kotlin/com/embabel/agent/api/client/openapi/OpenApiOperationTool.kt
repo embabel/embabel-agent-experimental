@@ -16,6 +16,9 @@
 package com.embabel.agent.api.client.openapi
 
 import com.embabel.agent.api.client.ToolNames
+import com.embabel.agent.api.client.ApiCall
+import com.embabel.agent.api.client.ApiCallError
+import com.embabel.agent.api.client.ApiCallInterceptor
 import com.embabel.agent.api.tool.Tool
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -32,6 +35,8 @@ import org.springframework.util.MultiValueMap
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientResponseException
 import org.springframework.web.util.UriComponentsBuilder
+import org.springframework.web.util.UriUtils
+import java.nio.charset.StandardCharsets
 import java.net.URI
 
 /**
@@ -63,6 +68,17 @@ class OpenApiOperationTool(
     // sitting in `Tool.Definition.metadata`. With this in place the
     // duplicated copies collapse to one.
     private val namedTypesJson: String? = null,
+    /**
+     * Cross-cutting hooks around this call. EMPTY BY DEFAULT, and deliberately so.
+     *
+     * [resolveQueryParams] is permissive: on GET and DELETE it forwards arguments the spec does not
+     * declare, because specs in the wild — especially synthesized ones — omit real parameters, and
+     * silently dropping them produces an unfiltered request the caller cannot diagnose. A pre-flight
+     * interceptor that REJECTS undeclared names is the exact opposite policy. Both are defensible,
+     * they cannot both be on, and which one is right depends on how trustworthy the spec is. So the
+     * choice belongs to whoever wires the client up, and the default preserves existing behaviour.
+     */
+    private val interceptors: List<ApiCallInterceptor> = emptyList(),
 ) : Tool {
 
     override val definition: Tool.Definition = Tool.Definition(
@@ -87,6 +103,7 @@ class OpenApiOperationTool(
     override fun call(input: String): Tool.Result {
         val started = System.currentTimeMillis()
         var uriForLog: String? = null
+        var interceptedCall: ApiCall? = null
         return try {
             @Suppress("UNCHECKED_CAST")
             val params: Map<String, Any?> = if (input.isBlank()) {
@@ -102,6 +119,21 @@ class OpenApiOperationTool(
 
             val uri = buildUri(resolvedPath, queryParams)
             uriForLog = uri.toString()
+
+            val call = ApiCall(
+                operationName = operation.operationId ?: path,
+                httpMethod = httpMethod.name,
+                url = uri.toString(),
+                suppliedArgumentNames = params.keys,
+                declaredParameterNames = declaredParameterNames(),
+            )
+            // Rejected here means the request is NOT sent: no latency, and no slice of the remote's
+            // rate limit spent on a mistake that was provable locally.
+            chain()?.beforeCall(call)?.let { rejected ->
+                logger.info("Rejected {} {} before dialling out: {}", httpMethod, uri, rejected.message)
+                return Tool.Result.error(rejected.message)
+            }
+            interceptedCall = call
 
             logger.info(
                 "Calling {} {} (baseUrl={}{})", httpMethod, uri, baseUrl,
@@ -145,7 +177,8 @@ class OpenApiOperationTool(
             val elapsed = "%,d".format(System.currentTimeMillis() - started)
             val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path after ${elapsed}ms: $errorBody"
             logger.warn(message)
-            Tool.Result.error(message, e)
+            val improved = improve(interceptedCall, ApiCallError(e.statusCode.value(), message))
+            Tool.Result.error(improved.message, e)
         } catch (e: Exception) {
             logger.warn(
                 "Error calling {} {} at {} after {}ms: {} ({})",
@@ -153,8 +186,36 @@ class OpenApiOperationTool(
                 "%,d".format(System.currentTimeMillis() - started),
                 e.javaClass.simpleName, e.message,
             )
-            Tool.Result.error("Error calling $httpMethod $path at $baseUrl: ${e.message}", e)
+            // A transport failure carries no status; an interceptor can still annotate it, and one
+            // that only handles 4xx will pass it straight through.
+            val improved = improve(interceptedCall, ApiCallError(null, "Error calling $httpMethod $path at $baseUrl: ${e.message}"))
+            Tool.Result.error(improved.message, e)
         }
+    }
+
+    private fun chain(): ApiCallInterceptor? =
+        if (interceptors.isEmpty()) null else ApiCallInterceptor.chain(interceptors)
+
+    /**
+     * Run [onError] hooks, never letting one break the error it was asked to improve. Returns the
+     * original when there is no call context — a failure raised before the [ApiCall] was built has
+     * nothing for an interceptor to reason about.
+     */
+    private fun improve(call: ApiCall?, error: ApiCallError): ApiCallError {
+        val c = call ?: return error
+        val chain = chain() ?: return error
+        return runCatching { chain.onError(c, error) }.getOrElse {
+            logger.warn("Interceptor threw while handling an error; using the original: {}", it.message)
+            error
+        }
+    }
+
+    /** Every name the operation declares — path, query, header, and request-body properties. */
+    private fun declaredParameterNames(): Set<String> {
+        val declared = (operation.parameters ?: emptyList()).map { it.name }.toSet()
+        val bodyProps = operation.requestBody?.content?.values?.firstOrNull()?.schema
+            ?.deref(componentsSchemas)?.properties?.keys.orEmpty()
+        return declared + bodyProps
     }
 
     private fun resolvePath(path: String, params: Map<String, Any?>): String {
@@ -325,25 +386,30 @@ class OpenApiOperationTool(
 
     private fun buildUri(resolvedPath: String, queryParams: Map<String, List<String>>): URI {
         val builder = UriComponentsBuilder
-            .fromUriString(baseUrl.trimEnd('/') + resolvedPath)
+            // The path is encoded up front for the same reason: `build(true)` below will not
+            // encode it, and a path segment can legitimately carry a space or non-ASCII.
+            .fromUriString(UriUtils.encodePath(baseUrl.trimEnd('/') + resolvedPath, StandardCharsets.UTF_8))
 
+        // Values are percent-encoded HERE, one at a time, rather than by a trailing
+        // `builder.encode()`. Both make a space safe; only this survives a BRACE.
+        // UriComponentsBuilder reads `{...}` in any component as a URI-template
+        // placeholder, so a value like `{"rings":[[…]]}` becomes an unexpanded
+        // variable and `toUri()` throws "Illegal character in query" — which is
+        // what a GeoJSON-ish polygon sent to an ArcGIS `/query` endpoint does.
+        // Encoding first turns the braces into %7B/%7D, and `build(true)` is then
+        // told the parts are already encoded so nothing re-encodes the `%`.
         queryParams.forEach { (key, values) ->
             values.forEach { value ->
-                builder.queryParam(key, value)
+                builder.queryParam(key, UriUtils.encodeQueryParam(value, StandardCharsets.UTF_8))
             }
         }
 
-        // `build()` alone does NOT percent-encode — a query value like
-        // "Pain and Glory" would go out as a raw space (`?t=Pain and Glory`),
-        // and `&`/`?`/`#`/non-ASCII in a value would corrupt the query. Encode
-        // explicitly so query (and path) values are URL-safe.
-        //
         // Return a java.net.URI, NOT a String: RestClient.uri(String) treats a
         // string as a URI *template* and encodes it AGAIN, turning our %20 into
         // %2520 — the server then decodes to a literal "%20" inside the value
         // (a multi-term GitHub `q` searched as one nonsense token: 422 or a
         // silent zero, embabel/me#459). RestClient.uri(URI) is used verbatim.
-        return builder.encode().build().toUri()
+        return builder.build(true).toUri()
     }
 
     private fun executeRequest(

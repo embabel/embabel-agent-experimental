@@ -2130,6 +2130,67 @@ class OpenApiOperationToolTest {
         }
     }
 
+    /**
+     * A query value containing BRACES.
+     *
+     * `UriComponentsBuilder` reads `{...}` in any component as a URI-template placeholder, so a
+     * value like an ArcGIS polygon (`{"rings":[[...]]}`) became an unexpanded variable and the URI
+     * could not be constructed at all — "Illegal character in query at index 96". The request never
+     * left the process, which reads downstream as a source failure rather than a client defect.
+     */
+    @Nested
+    inner class BracesInQueryValues {
+
+        private fun geometryOp() = Operation().apply {
+            operationId = "queryGeometry"
+            parameters = listOf(
+                Parameter().name("geometry").`in`("query").schema(StringSchema()),
+                Parameter().name("f").`in`("query").schema(StringSchema()),
+            )
+        }
+
+        @Test
+        fun `a JSON polygon in a query value is sent, percent-encoded, not rejected`() {
+            val (tool, server) = createToolWithMock(PathItem.HttpMethod.GET, "/9/query", geometryOp())
+
+            server.expect(requestTo(containsString("geometry=%7B%22rings%22")))
+                .andRespond(withSuccess("""{"features":[]}""", MediaType.APPLICATION_JSON))
+
+            // The real shape an ArcGIS polygon query sends. Escaped by hand rather than built with
+            // a mapper so the braces and quotes under test are visible in the source.
+            val call = "{\"geometry\": \"{\\\"rings\\\":[[[150.31,-33.73],[150.32,-33.74]]]}\", \"f\": \"json\"}"
+            val result = tool.call(call)
+
+            assertInstanceOf(Tool.Result.Text::class.java, result)
+            server.verify()
+        }
+
+        /**
+         * The regression guard for the fix itself: encoding the value must not double-encode it.
+         * A `%20` that becomes `%2520` reaches the server as the literal text "%20".
+         */
+        @Test
+        fun `a space is encoded exactly once`() {
+            val (tool, server) = createToolWithMock(PathItem.HttpMethod.GET, "/9/query", geometryOp())
+            server.expect(requestTo(allOf(containsString("geometry=a%20b"), org.hamcrest.Matchers.not(containsString("%2520")))))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"geometry": "a b", "f": "json"}""")
+            server.verify()
+        }
+
+        /** An ampersand in a value must not split into a second parameter. */
+        @Test
+        fun `a reserved character cannot corrupt the query`() {
+            val (tool, server) = createToolWithMock(PathItem.HttpMethod.GET, "/9/query", geometryOp())
+            server.expect(requestTo(containsString("geometry=a%26f%3Dpwned")))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"geometry": "a&f=pwned", "f": "json"}""")
+            server.verify()
+        }
+    }
+
     // ======================================================================
     // Helpers
     // ======================================================================
