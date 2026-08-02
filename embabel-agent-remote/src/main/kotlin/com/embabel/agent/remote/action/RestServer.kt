@@ -16,17 +16,18 @@
 package com.embabel.agent.remote.action
 
 import com.embabel.agent.core.*
-import com.fasterxml.jackson.core.type.TypeReference
-import com.fasterxml.jackson.databind.ObjectMapper
 import org.jetbrains.annotations.ApiStatus
 import org.springframework.http.client.JdkClientHttpRequestFactory
 import org.springframework.http.converter.ByteArrayHttpMessageConverter
 import org.springframework.http.converter.ResourceHttpMessageConverter
 import org.springframework.http.converter.StringHttpMessageConverter
-import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter
 import org.springframework.http.converter.support.AllEncompassingFormHttpMessageConverter
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.body
+import tools.jackson.core.type.TypeReference
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.databind.json.JsonMapper
 
 
 /**
@@ -44,7 +45,7 @@ class RestServer(
          * Create a properly configured RestClient with JSON support.
          * Uses HTTP/1.1 only to avoid protocol upgrade issues with some servers.
          */
-        fun createRestClient(objectMapper: ObjectMapper): RestClient {
+        fun createRestClient(jsonMapper: JsonMapper): RestClient {
             // Use JDK HttpClient with HTTP/1.1 only (no upgrade protocols)
             val jdkHttpClient = java.net.http.HttpClient.newBuilder()
                 .version(java.net.http.HttpClient.Version.HTTP_1_1)
@@ -53,12 +54,12 @@ class RestServer(
 
             return RestClient.builder()
                 .requestFactory(requestFactory)
-                .messageConverters { converters ->
-                    converters.add(ByteArrayHttpMessageConverter())
-                    converters.add(StringHttpMessageConverter())
-                    converters.add(ResourceHttpMessageConverter())
-                    converters.add(AllEncompassingFormHttpMessageConverter())
-                    converters.add(MappingJackson2HttpMessageConverter(objectMapper))
+                .configureMessageConverters {
+                    it.addCustomConverter(ByteArrayHttpMessageConverter())
+                    it.addCustomConverter(StringHttpMessageConverter())
+                    it.addCustomConverter(ResourceHttpMessageConverter())
+                    it.addCustomConverter(AllEncompassingFormHttpMessageConverter())
+                    it.addCustomConverter(JacksonJsonHttpMessageConverter(jsonMapper))
                 }
                 .build()
         }

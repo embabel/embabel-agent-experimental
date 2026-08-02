@@ -20,12 +20,11 @@ import com.embabel.agent.eval.client.GenerationEvent
 import com.embabel.agent.eval.client.MessageRole
 import com.embabel.agent.eval.client.OpenAiCompatibleMessage
 import com.embabel.agent.eval.client.SessionCreationRequest
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import org.slf4j.LoggerFactory
 import org.springframework.core.io.DefaultResourceLoader
 import org.springframework.core.io.ResourceLoader
+import tools.jackson.dataformat.yaml.YAMLMapper
+import tools.jackson.module.kotlin.kotlinModule
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlin.math.max
@@ -79,7 +78,10 @@ data class EvaluationJob(
 
     companion object {
 
-        private val yom = ObjectMapper(YAMLFactory()).registerKotlinModule()
+        private val yom = YAMLMapper.builder()
+            .addModule(kotlinModule())
+            .findAndAddModules()
+            .build()
 
         fun fromYml(location: String, resourceLoader: ResourceLoader = DefaultResourceLoader()): EvaluationJob {
             return yom.readValue<EvaluationJob>(

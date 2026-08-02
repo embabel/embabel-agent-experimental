@@ -18,11 +18,11 @@ package com.embabel.agent.api.client.graphql
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.agent.core.AgentProcess
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
+import tools.jackson.module.kotlin.jacksonObjectMapper
 
 /**
  * Live integration tests for [GraphQlLearner] against public GraphQL APIs.
