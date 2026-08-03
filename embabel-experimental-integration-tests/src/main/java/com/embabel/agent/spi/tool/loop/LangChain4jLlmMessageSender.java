@@ -25,7 +25,7 @@ import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.TokenUsage;
@@ -54,9 +54,9 @@ public class LangChain4jLlmMessageSender implements LlmMessageSender {
 
     private static final Logger logger = LoggerFactory.getLogger(LangChain4jLlmMessageSender.class);
 
-    private final ChatLanguageModel chatModel;
+    private final ChatModel chatModel;
 
-    public LangChain4jLlmMessageSender(ChatLanguageModel chatModel) {
+    public LangChain4jLlmMessageSender(ChatModel chatModel) {
         this.chatModel = chatModel;
     }
 
