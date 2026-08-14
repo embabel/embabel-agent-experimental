@@ -256,6 +256,17 @@ class OpenApiOperationTool(
         return declared + bodyProps
     }
 
+    /**
+     * Substitute every `{param}` placeholder in the path with the caller's argument.
+     *
+     * OpenAPI 3 requires path parameters to be `required: true`, so a missing or
+     * misnamed one is not optional data -- it's a call that cannot possibly reach
+     * the right resource. We throw here rather than let the literal placeholder
+     * survive into the URI: a request for `/shows/{id}` sent as-is is guaranteed
+     * to 404, and that 404 tells the caller nothing about which argument was
+     * missing. Naming the parameter and the keys actually supplied turns a dead
+     * end into something the caller (often an LLM) can correct and retry.
+     */
     private fun resolvePath(path: String, params: Map<String, Any?>): String {
         // Returns an ALREADY-ENCODED path, encoding the template and the values SEPARATELY —
         // because only here is it still known which characters came from the caller.
@@ -269,17 +280,26 @@ class OpenApiOperationTool(
         //
         // So: static stretches get `encodePath` (which preserves the separators they legitimately
         // contain), and each substituted value gets `encodePathSegment` (which does NOT, because a
-        // value is one segment and a slash inside it is data). An unfilled placeholder is encoded
-        // as the template text it still is, exactly as before.
+        // value is one segment and a slash inside it is data).
+        //
+        // A missing value is REFUSED, not passed through. OpenAPI 3 requires path parameters to
+        // be `required: true`, so an absent or misnamed one is not optional data — it is a call
+        // that cannot possibly reach the right resource. Letting the literal placeholder survive
+        // into the URI guarantees a 404 that says nothing about which argument was missing;
+        // naming the parameter and the keys actually supplied turns a dead end into something
+        // the caller (often an LLM) can correct and retry.
         val out = StringBuilder()
         var cursor = 0
         PATH_PLACEHOLDER.findAll(path).forEach { match ->
             out.append(UriUtils.encodePath(path.substring(cursor, match.range.first), StandardCharsets.UTF_8))
-            val value = params[match.groupValues[1]]
-            out.append(
-                if (value != null) UriUtils.encodePathSegment(value.toString(), StandardCharsets.UTF_8)
-                else UriUtils.encodePath(match.value, StandardCharsets.UTF_8),
-            )
+            val paramName = match.groupValues[1]
+            val value = params[paramName]
+                ?: throw IllegalArgumentException(
+                    "Missing required path parameter '$paramName' for operation " +
+                        "'${operation.operationId ?: path}' ($httpMethod $path). " +
+                        "Provided arguments: ${params.keys}",
+                )
+            out.append(UriUtils.encodePathSegment(value.toString(), StandardCharsets.UTF_8))
             cursor = match.range.last + 1
         }
         out.append(UriUtils.encodePath(path.substring(cursor), StandardCharsets.UTF_8))
