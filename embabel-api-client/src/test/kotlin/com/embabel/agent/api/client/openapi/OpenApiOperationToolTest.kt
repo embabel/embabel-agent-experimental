@@ -1448,6 +1448,79 @@ class OpenApiOperationToolTest {
     }
 
     // ======================================================================
+    // Path parameter validation
+    // ======================================================================
+
+    @Nested
+    inner class PathParameterValidationTests {
+
+        /**
+         * A learned streaming API's `getShow` operation declares `GET /shows/{id}`.
+         * Calling it without `id` used to leave the literal `{id}` in the built
+         * URI, which the remote 404'd on every time -- a call that could never
+         * succeed, surfacing as an opaque HTTP error instead of naming the
+         * missing argument.
+         */
+        private fun getShowOperation() = Operation().apply {
+            operationId = "getShow"
+            parameters = listOf(
+                Parameter().apply {
+                    name = "id"
+                    `in` = "path"
+                    required = true
+                    schema = StringSchema()
+                },
+            )
+        }
+
+        @Test
+        fun `missing path parameter fails fast instead of sending the literal placeholder`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/shows/{id}",
+                operation = getShowOperation(),
+            )
+
+            val result = tool.call("{}")
+
+            assertInstanceOf(Tool.Result.Error::class.java, result)
+            val error = result as Tool.Result.Error
+            assertTrue(error.message.contains("id"), "Error should name the missing parameter 'id': ${error.message}")
+            server.verify() // no request expectations registered -- a request would fail verification
+        }
+
+        @Test
+        fun `misnamed path parameter fails fast and lists the provided keys`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/shows/{id}",
+                operation = getShowOperation(),
+            )
+
+            val result = tool.call("""{"imdbId": "tt1234567"}""")
+
+            assertInstanceOf(Tool.Result.Error::class.java, result)
+            val error = result as Tool.Result.Error
+            assertTrue(error.message.contains("id"), "Error should name the missing parameter 'id': ${error.message}")
+            assertTrue(error.message.contains("imdbId"), "Error should list the provided key 'imdbId': ${error.message}")
+            server.verify() // no request expectations registered -- a request would fail verification
+        }
+
+        @Test
+        fun `correctly supplied path parameter still builds the substituted URL`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/shows/{id}",
+                operation = getShowOperation(),
+            )
+            server.expect(requestTo("https://api.example.com/shows/tt1234567"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""{"id": "tt1234567"}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"id": "tt1234567"}""")
+            assertIsText(result, """{"id": "tt1234567"}""")
+            server.verify()
+        }
+    }
+
+    // ======================================================================
     // URI building
     // ======================================================================
 

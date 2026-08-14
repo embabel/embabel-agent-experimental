@@ -218,13 +218,29 @@ class OpenApiOperationTool(
         return declared + bodyProps
     }
 
+    /**
+     * Substitute every `{param}` placeholder in the path with the caller's argument.
+     *
+     * OpenAPI 3 requires path parameters to be `required: true`, so a missing or
+     * misnamed one is not optional data -- it's a call that cannot possibly reach
+     * the right resource. We throw here rather than let the literal placeholder
+     * survive into the URI: a request for `/shows/{id}` sent as-is is guaranteed
+     * to 404, and that 404 tells the caller nothing about which argument was
+     * missing. Naming the parameter and the keys actually supplied turns a dead
+     * end into something the caller (often an LLM) can correct and retry.
+     */
     private fun resolvePath(path: String, params: Map<String, Any?>): String {
         var resolved = path
         pathParameterNames().forEach { paramName ->
             val value = params[paramName]
-            if (value != null) {
-                resolved = resolved.replace("{$paramName}", value.toString())
+            if (value == null) {
+                throw IllegalArgumentException(
+                    "Missing required path parameter '$paramName' for operation " +
+                        "'${operation.operationId ?: path}' ($httpMethod $path). " +
+                        "Provided arguments: ${params.keys}",
+                )
             }
+            resolved = resolved.replace("{$paramName}", value.toString())
         }
         return resolved
     }
