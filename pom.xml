@@ -15,7 +15,7 @@
     <packaging>pom</packaging>
 
     <properties>
-        <revision>1.5.0-SNAPSHOT</revision>
+        <revision>1.5.1-SNAPSHOT</revision>
         <victools.version>5.0.0</victools.version>
     </properties>
     <name>Embabel Example Agent Experimental</name>
