@@ -63,6 +63,7 @@ The following modules are currently in the experimental repository:
 | **embabel-agent-claude-code** | Claude Code CLI integration | Active Development |
 | **embabel-agent-discord** | Discord integration for agent interactions | Active Development |
 | **embabel-agent-eval** | Agent evaluation and benchmarking capabilities | Active Development |
+| **embabel-agent-experimental-bom** | Bill of Materials for centralized dependency management | Active Development |
 | **embabel-agent-remote** | Remote agent execution and distributed processing | Active Development |
 | **embabel-agent-sandbox** | Utilities for running agents in a sandbox environment | Active Development |
 | **embabel-agent-spec** | Specification and contract testing utilities | Active Development |
