@@ -1432,6 +1432,150 @@ class OpenApiOperationToolTest {
         }
 
         @Test
+        fun `an HTTP error names the URL actually called, not the path template`() {
+            // The defect: the error said `.../pets/{petId}`, so a call whose path parameter was
+            // never substituted and one that simply asked for a missing pet produced the SAME
+            // message. Debugging a realm against a live API, that difference is the whole answer —
+            // and this string is also what the model is handed to correct itself from, so a
+            // template teaches it nothing about which value was wrong.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets/{petId}",
+                operation = Operation().apply {
+                    operationId = "getPetById"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "petId"
+                            `in` = "path"
+                            required = true
+                            schema = IntegerSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/pets/999"))
+                .andRespond(withResourceNotFound().body("Pet not found"))
+
+            val error = tool.call("""{"petId": 999}""") as Tool.Result.Error
+            assertTrue(
+                error.message.contains("https://api.example.com/pets/999"),
+                "should name the resolved URL, got: ${error.message}",
+            )
+            assertFalse(
+                error.message.contains("{petId}"),
+                "must not leave the path template in the message, got: ${error.message}",
+            )
+        }
+
+        @Test
+        fun `a path parameter containing a slash is encoded as one segment`() {
+            // deps.dev keys projects on a host-qualified path: github.com/apache/logging-log4j2.
+            // Substituting raw and encoding afterwards left the slashes as SEPARATORS, so the
+            // request became /v3/projects/github.com — truncated at the first slash, the rest
+            // silently lost, and a 400 that looked like a bad key rather than a mangled URL.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/v3/projects/{projectKey}",
+                operation = Operation().apply {
+                    operationId = "getProject"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "projectKey"
+                            `in` = "path"
+                            required = true
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v3/projects/github.com%2Fapache%2Flogging-log4j2"))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"projectKey": "github.com/apache/logging-log4j2"}""")
+
+            assertInstanceOf(Tool.Result.Text::class.java, result)
+            server.verify()
+        }
+
+        @Test
+        fun `a path parameter is not double-encoded`() {
+            // The obvious workaround — pre-encoding the value — was the one thing that could not
+            // work, because the old pass then encoded the `%` and shipped `%252F`. A caller who
+            // still pre-encodes must not be silently mangled: a literal `%2F` in the value is a
+            // percent sign followed by 2F, and round-trips as `%252F` by definition. What must
+            // NOT happen is a RAW slash arriving as `%252F`.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/things/{id}",
+                operation = Operation().apply {
+                    operationId = "getThing"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "id"
+                            `in` = "path"
+                            required = true
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/things/a%2Fb"))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"id": "a/b"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `an ordinary path parameter is unchanged, and a space still encodes`() {
+            // The overwhelmingly common case must not move. A space encoded to %20 before and
+            // must still: the static template and the value are encoded separately now, not less.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets/{name}",
+                operation = Operation().apply {
+                    operationId = "getPetByName"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "name"
+                            `in` = "path"
+                            required = true
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/pets/mr%20bojangles"))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"name": "mr bojangles"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `an HTTP error keeps the query string, so a bad parameter value is visible`() {
+            // A wrong query value is the commonest cause of a 4xx from a well-formed request, and
+            // it is invisible unless the query string survives into the message.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets/findByStatus",
+                operation = Operation().apply {
+                    operationId = "findPetsByStatus"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "status"
+                            `in` = "query"
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/pets/findByStatus?status=banana"))
+                .andRespond(withBadRequest().body("unknown status"))
+
+            val error = tool.call("""{"status": "banana"}""") as Tool.Result.Error
+            assertTrue(
+                error.message.contains("status=banana"),
+                "the offending value should be in the message, got: ${error.message}",
+            )
+        }
+
+        @Test
         fun `HTTP 500 returns error result`() {
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.GET, "/store/inventory",

@@ -175,7 +175,16 @@ class OpenApiOperationTool(
             // and the LLM-visible tool error get it, so the model can correct.
             val errorBody = e.responseBodyAsString.take(2000)
             val elapsed = "%,d".format(System.currentTimeMillis() - started)
-            val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path after ${elapsed}ms: $errorBody"
+            // The URL ACTUALLY CALLED, not the template it came from. `$baseUrl$path` reads
+            // `/v3/projects/{projectKey}`, which makes a substitution failure and a genuinely bad
+            // parameter value look identical — the caller cannot tell whether the placeholder was
+            // filled in wrongly or never filled in at all, and neither can the model, which is
+            // handed this same string to correct itself from. `uriForLog` is set the moment the URI
+            // is built and is what the surrounding info logs already print, so this is consistency
+            // rather than new exposure. It falls back to the template only when the URI could not
+            // be built at all, where the template is genuinely all there is.
+            val called = uriForLog ?: "$baseUrl$path"
+            val message = "HTTP ${e.statusCode.value()} from $httpMethod $called after ${elapsed}ms: $errorBody"
             logger.warn(message)
             val improved = improve(interceptedCall, ApiCallError(e.statusCode.value(), message))
             Tool.Result.error(improved.message, e)
@@ -188,7 +197,12 @@ class OpenApiOperationTool(
             )
             // A transport failure carries no status; an interceptor can still annotate it, and one
             // that only handles 4xx will pass it straight through.
-            val improved = improve(interceptedCall, ApiCallError(null, "Error calling $httpMethod $path at $baseUrl: ${e.message}"))
+            // Same reasoning as above: the log line just above already names the resolved URI, so the
+            // message the MODEL sees should not disagree with it.
+            val improved = improve(
+                interceptedCall,
+                ApiCallError(null, "Error calling $httpMethod ${uriForLog ?: path} at $baseUrl: ${e.message}"),
+            )
             Tool.Result.error(improved.message, e)
         }
     }
@@ -219,14 +233,33 @@ class OpenApiOperationTool(
     }
 
     private fun resolvePath(path: String, params: Map<String, Any?>): String {
-        var resolved = path
-        pathParameterNames().forEach { paramName ->
-            val value = params[paramName]
-            if (value != null) {
-                resolved = resolved.replace("{$paramName}", value.toString())
-            }
+        // Returns an ALREADY-ENCODED path, encoding the template and the values SEPARATELY —
+        // because only here is it still known which characters came from the caller.
+        //
+        // Substituting raw and encoding the assembled string afterwards cannot work: `/` is legal
+        // in a path, so an encoder run over the finished string leaves a slash IN A VALUE as a
+        // separator. `GET /v3/projects/{projectKey}` with `github.com/apache/logging-log4j2`
+        // became `/v3/projects/github.com` — truncated at the first slash, the rest silently lost.
+        // Pre-encoding the value to `%2F` did not help either, since the same pass then encoded the
+        // `%` to `%25`. There was no input that reached the server as `%2F`.
+        //
+        // So: static stretches get `encodePath` (which preserves the separators they legitimately
+        // contain), and each substituted value gets `encodePathSegment` (which does NOT, because a
+        // value is one segment and a slash inside it is data). An unfilled placeholder is encoded
+        // as the template text it still is, exactly as before.
+        val out = StringBuilder()
+        var cursor = 0
+        PATH_PLACEHOLDER.findAll(path).forEach { match ->
+            out.append(UriUtils.encodePath(path.substring(cursor, match.range.first), StandardCharsets.UTF_8))
+            val value = params[match.groupValues[1]]
+            out.append(
+                if (value != null) UriUtils.encodePathSegment(value.toString(), StandardCharsets.UTF_8)
+                else UriUtils.encodePath(match.value, StandardCharsets.UTF_8),
+            )
+            cursor = match.range.last + 1
         }
-        return resolved
+        out.append(UriUtils.encodePath(path.substring(cursor), StandardCharsets.UTF_8))
+        return out.toString()
     }
 
     /**
@@ -283,10 +316,8 @@ class OpenApiOperationTool(
             }
     }
 
-    private fun pathParameterNames(): List<String> {
-        val regex = "\\{([^}]+)}".toRegex()
-        return regex.findAll(path).map { it.groupValues[1] }.toList()
-    }
+    private fun pathParameterNames(): List<String> =
+        PATH_PLACEHOLDER.findAll(path).map { it.groupValues[1] }.toList()
 
     /**
      * Names of parameters the spec declares as `in: header`.
@@ -386,9 +417,12 @@ class OpenApiOperationTool(
 
     private fun buildUri(resolvedPath: String, queryParams: Map<String, List<String>>): URI {
         val builder = UriComponentsBuilder
-            // The path is encoded up front for the same reason: `build(true)` below will not
-            // encode it, and a path segment can legitimately carry a space or non-ASCII.
-            .fromUriString(UriUtils.encodePath(baseUrl.trimEnd('/') + resolvedPath, StandardCharsets.UTF_8))
+            // `resolvedPath` arrives ALREADY ENCODED from resolvePath, which is the only place that
+            // still knows which characters were caller-supplied values rather than separators.
+            // Re-encoding it here would turn its `%2F` into `%252F`. The base URL carries no
+            // placeholders, so it is encoded on its own for the reason the path once was:
+            // `build(true)` below will not encode it, and a base can carry a space or non-ASCII.
+            .fromUriString(UriUtils.encodePath(baseUrl.trimEnd('/'), StandardCharsets.UTF_8) + resolvedPath)
 
         // Values are percent-encoded HERE, one at a time, rather than by a trailing
         // `builder.encode()`. Both make a space safe; only this survives a BRACE.
@@ -492,6 +526,9 @@ class OpenApiOperationTool(
     }
 
     companion object {
+
+        /** `{name}` in a path template. Compiled once; used to find the names AND to substitute. */
+        private val PATH_PLACEHOLDER = Regex("\\{([^}]+)}")
 
         /**
          * Metadata key for the JSON Schema string describing the tool's
