@@ -21,7 +21,6 @@ import com.embabel.agent.api.client.model.*
 import io.swagger.v3.oas.models.OpenAPI
 import io.swagger.v3.oas.models.Operation
 import io.swagger.v3.oas.models.PathItem
-import io.swagger.v3.oas.models.media.ArraySchema
 import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.parameters.Parameter
 
@@ -132,7 +131,9 @@ internal object OpenApiModelBuilder {
                 return ApiSchema.Ref(typeName = name, description = schema.description)
             }
         }
-        return when (schema.type) {
+        val type = schema.type ?: schema.types?.firstOrNull { it != "null" }
+            ?: if (schema.items != null) "array" else null
+        return when (type) {
             "string" -> ApiSchema.Primitive(
                 type = PrimitiveType.STRING,
                 format = schema.format,
@@ -161,17 +162,11 @@ internal object OpenApiModelBuilder {
                 type = PrimitiveType.BOOLEAN,
                 description = schema.description,
             )
-            "array" -> {
-                val itemSchema = if (schema is ArraySchema && schema.items != null) {
-                    convertSchema(schema.items)
-                } else {
-                    ApiSchema.Primitive(type = PrimitiveType.STRING)
-                }
-                ApiSchema.Array(
-                    items = itemSchema,
-                    description = schema.description,
-                )
-            }
+            "array" -> ApiSchema.Array(
+                items = schema.items?.let { convertSchema(it) }
+                    ?: ApiSchema.Primitive(type = PrimitiveType.STRING),
+                description = schema.description,
+            )
             else -> convertObjectSchema(schema, nameHint)
         }
     }
@@ -233,10 +228,12 @@ internal object OpenApiModelBuilder {
     private fun extractResponses(operation: Operation): Map<String, ApiResponse> {
         val responses = operation.responses ?: return emptyMap()
         return responses.mapValues { (_, response) ->
-            val schema = response.content
-                ?.get("application/json")
-                ?.schema
-                ?.let { convertSchema(it) }
+            val content = response.content
+            fun mediaType(key: String) = key.substringBefore(';').trim().lowercase()
+            val media = content?.entries?.firstOrNull { mediaType(it.key) == "application/json" }?.value
+                ?: content?.entries?.firstOrNull { mediaType(it.key).endsWith("+json") }?.value
+                ?: content?.entries?.firstOrNull { mediaType(it.key) == "*/*" }?.value
+            val schema = media?.schema?.let { convertSchema(it) }
             ApiResponse(
                 description = response.description,
                 schema = schema,
