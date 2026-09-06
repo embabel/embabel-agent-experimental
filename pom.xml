@@ -23,6 +23,7 @@
 
     <modules>
         <module>embabel-agent-experimental-bom</module>
+        <module>embabel-agent-codex</module>
         <module>embabel-agent-sandbox</module>
         <module>embabel-agent-claude-code</module>
         <module>embabel-agent-discord</module>
