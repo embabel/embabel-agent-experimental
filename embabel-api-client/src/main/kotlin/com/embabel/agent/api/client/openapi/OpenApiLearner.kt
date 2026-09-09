@@ -18,6 +18,7 @@ package com.embabel.agent.api.client.openapi
 import com.embabel.agent.api.client.*
 import com.embabel.agent.api.client.model.ApiModel
 import com.embabel.agent.api.client.model.ApiOperation
+import com.embabel.agent.api.client.model.canonicalOpId
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.agent.api.tool.progressive.UnfoldingTool
@@ -211,9 +212,10 @@ class OpenApiLearner(
                 // turn a typo in apis.yml into "tool quietly missing" hours
                 // later. Compare against the post-tag-filter model so an
                 // op-id that exists but was excluded by a tag also warns.
-                val missing = operationIds.filter {
-                    tagFiltered.filterByOperationIds(setOf(it)).allOperations.isEmpty()
-                }
+                val present = tagFiltered.allOperations
+                    .flatMap { listOfNotNull(it.operationId, it.name) }
+                    .mapTo(mutableSetOf()) { it.canonicalOpId() }
+                val missing = operationIds.filter { it.canonicalOpId() !in present }
                 if (missing.isNotEmpty()) {
                     logger.warn(
                         "Requested operationIds not found in spec '{}': {}",

@@ -59,10 +59,7 @@ data class ApiModel(
      * Resources with no surviving operations are dropped.
      */
     fun filterByOperationIds(operationIds: Set<String>): ApiModel {
-        val operations = allOperations
-        val exact = operationIds.filterTo(mutableSetOf()) { requested ->
-            operations.any { it.operationId == requested }
-        }
+        val exact = operationIds intersect allOperations.mapNotNullTo(mutableSetOf()) { it.operationId }
         val canonicalFallbacks = (operationIds - exact).map { it.canonicalOpId() }.toSet()
         return copy(
             resources = resources
