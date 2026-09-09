@@ -128,6 +128,14 @@ class ApiModelTest {
         assertEquals(listOf("available", "pending", "sold"), (items as ApiSchema.Primitive).enumValues)
     }
 
+    @Test
+    fun `query parameter default is preserved`() {
+        val limit = model().allOperations.find { it.name == "listPets" }!!
+            .parameters.find { it.name == "limit" }!!
+
+        assertEquals(50, (limit.schema as ApiSchema.Primitive).defaultValue)
+    }
+
     // --- Request body ---
 
     @Test

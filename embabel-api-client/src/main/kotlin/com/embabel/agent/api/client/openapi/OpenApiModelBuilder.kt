@@ -147,20 +147,24 @@ internal object OpenApiModelBuilder {
                 // marker on the enclosing property.
                 enumValues = schema.enum?.mapNotNull { it?.toString() },
                 description = schema.description,
+                defaultValue = schema.default,
             )
             "integer" -> ApiSchema.Primitive(
                 type = PrimitiveType.INTEGER,
                 format = schema.format,
                 description = schema.description,
+                defaultValue = schema.default,
             )
             "number" -> ApiSchema.Primitive(
                 type = PrimitiveType.NUMBER,
                 format = schema.format,
                 description = schema.description,
+                defaultValue = schema.default,
             )
             "boolean" -> ApiSchema.Primitive(
                 type = PrimitiveType.BOOLEAN,
                 description = schema.description,
+                defaultValue = schema.default,
             )
             "array" -> ApiSchema.Array(
                 items = schema.items?.let { convertSchema(it) }
