@@ -81,6 +81,29 @@ class OpenApiOperationTool(
     private val callableName: String = OpenApiModelBuilder.operationName(httpMethod, path, operation),
 ) : Tool {
 
+    constructor(
+        baseUrl: String,
+        path: String,
+        httpMethod: PathItem.HttpMethod,
+        operation: Operation,
+        restClient: RestClient,
+        objectMapper: ObjectMapper,
+        componentsSchemas: Map<String, Schema<*>>,
+        namedTypesJson: String?,
+        interceptors: List<ApiCallInterceptor>,
+    ) : this(
+        baseUrl,
+        path,
+        httpMethod,
+        operation,
+        restClient,
+        objectMapper,
+        componentsSchemas,
+        namedTypesJson,
+        interceptors,
+        OpenApiModelBuilder.operationName(httpMethod, path, operation),
+    )
+
     override val definition: Tool.Definition = Tool.Definition(
         name = callableName,
         description = operationDescription(operation),
