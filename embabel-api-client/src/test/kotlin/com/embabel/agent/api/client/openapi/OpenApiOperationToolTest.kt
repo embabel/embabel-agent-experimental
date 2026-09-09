@@ -17,6 +17,7 @@ package com.embabel.agent.api.client.openapi
 
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.swagger.v3.oas.models.OpenAPI
 import io.swagger.v3.oas.models.Operation
 import io.swagger.v3.oas.models.PathItem
@@ -64,6 +65,23 @@ class OpenApiOperationToolTest {
 
     @Nested
     inner class OperationNameTests {
+
+        @Test
+        fun `retains the original JVM constructor`() {
+            assertDoesNotThrow {
+                OpenApiOperationTool::class.java.getConstructor(
+                    String::class.java,
+                    String::class.java,
+                    PathItem.HttpMethod::class.java,
+                    Operation::class.java,
+                    RestClient::class.java,
+                    ObjectMapper::class.java,
+                    Map::class.java,
+                    String::class.java,
+                    List::class.java,
+                )
+            }
+        }
 
         @Test
         fun `uses operationId when available`() {

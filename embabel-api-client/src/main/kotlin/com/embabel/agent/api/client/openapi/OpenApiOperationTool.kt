@@ -15,7 +15,6 @@
  */
 package com.embabel.agent.api.client.openapi
 
-import com.embabel.agent.api.client.ToolNames
 import com.embabel.agent.api.client.ApiCall
 import com.embabel.agent.api.client.ApiCallError
 import com.embabel.agent.api.client.ApiCallInterceptor
@@ -28,6 +27,7 @@ import io.swagger.v3.oas.models.media.ArraySchema
 import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.parameters.Parameter
 import org.slf4j.LoggerFactory
+import org.springframework.http.HttpMethod
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.util.LinkedMultiValueMap
@@ -79,10 +79,34 @@ class OpenApiOperationTool(
      * choice belongs to whoever wires the client up, and the default preserves existing behaviour.
      */
     private val interceptors: List<ApiCallInterceptor> = emptyList(),
+    private val callableName: String = OpenApiModelBuilder.operationName(httpMethod, path, operation),
 ) : Tool {
 
+    constructor(
+        baseUrl: String,
+        path: String,
+        httpMethod: PathItem.HttpMethod,
+        operation: Operation,
+        restClient: RestClient,
+        objectMapper: ObjectMapper,
+        componentsSchemas: Map<String, Schema<*>>,
+        namedTypesJson: String?,
+        interceptors: List<ApiCallInterceptor>,
+    ) : this(
+        baseUrl,
+        path,
+        httpMethod,
+        operation,
+        restClient,
+        objectMapper,
+        componentsSchemas,
+        namedTypesJson,
+        interceptors,
+        OpenApiModelBuilder.operationName(httpMethod, path, operation),
+    )
+
     override val definition: Tool.Definition = Tool.Definition(
-        name = operationName(httpMethod, path, operation),
+        name = callableName,
         description = operationDescription(operation),
         inputSchema = buildInputSchema(operation, componentsSchemas),
     ).let { def ->
@@ -466,6 +490,9 @@ class OpenApiOperationTool(
             PathItem.HttpMethod.POST -> executeWithBody(restClient.post().uri(uri).withDeclaredHeaders(), body)
             PathItem.HttpMethod.PUT -> executeWithBody(restClient.put().uri(uri).withDeclaredHeaders(), body)
             PathItem.HttpMethod.PATCH -> executeWithBody(restClient.patch().uri(uri).withDeclaredHeaders(), body)
+            PathItem.HttpMethod.TRACE -> restClient.method(HttpMethod.TRACE).uri(uri)
+                .withDeclaredHeaders()
+                .retrieve().toEntity(String::class.java)
 
             else -> throw UnsupportedOperationException("HTTP method $httpMethod not supported")
         }
@@ -751,22 +778,7 @@ class OpenApiOperationTool(
             httpMethod: PathItem.HttpMethod,
             path: String,
             operation: Operation,
-        ): String {
-            // Prefer operationId if available
-            if (!operation.operationId.isNullOrBlank()) {
-                return ToolNames.sanitize(operation.operationId)
-            }
-            // Synthesize from method + path: GET /pets/{petId} → get_pets_by_petId
-            val synthesized = path
-                .replace("{", "by_")
-                .replace("}", "")
-                .replace("/", "_")
-                .replace("-", "_")
-                .trimStart('_')
-                .trimEnd('_')
-                .replace("__", "_")
-            return ToolNames.sanitize("${httpMethod.name.lowercase()}_$synthesized")
-        }
+        ): String = OpenApiModelBuilder.operationName(httpMethod, path, operation)
 
         internal fun operationDescription(operation: Operation): String {
             return listOfNotNull(
