@@ -16,9 +16,9 @@
 package com.embabel.agent.claudecode
 
 import com.embabel.agent.executor.AgentExecutor
-import com.embabel.agent.mcp.EphemeralMcpToolServer
 import com.embabel.agent.executor.AgentRequest
 import com.embabel.agent.executor.TypedResult
+import com.embabel.agent.mcp.EphemeralMcpToolServer
 import com.embabel.agent.sandbox.ExecutionRequest
 import com.embabel.agent.sandbox.ExecutionResult
 import com.embabel.agent.sandbox.SandboxConfig
@@ -26,9 +26,9 @@ import com.embabel.agent.sandbox.SandboxSession
 import com.embabel.agent.sandbox.SandboxedExecutor
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonTypeName
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
+import tools.jackson.module.kotlin.jacksonObjectMapper
+import tools.jackson.module.kotlin.readValue
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
@@ -587,13 +587,13 @@ class ClaudeCodeAgentExecutor(
 
         try {
             val json = objectMapper.readTree(line)
-            val type = json.get("type")?.asText()
+            val type = json.get("type")?.asString()
 
             when (type) {
                 "assistant" -> {
                     val message = json.get("message")?.get("content")
                     if (message != null && message.isArray && message.size() > 0) {
-                        val text = message[0]?.get("text")?.asText()
+                        val text = message[0]?.get("text")?.asString()
                         if (!text.isNullOrBlank()) {
                             logger.info("[Claude] {}", text.take(200))
                             callback?.invoke(ClaudeStreamEvent.Text(text))
@@ -606,21 +606,21 @@ class ClaudeCodeAgentExecutor(
                         val firstContent = message[0]
                         val toolResult = firstContent?.get("tool_result")
                         if (toolResult != null) {
-                            val toolName = toolResult.get("tool_use_id")?.asText() ?: "tool"
+                            val toolName = toolResult.get("tool_use_id")?.asString() ?: "tool"
                             logger.info("[Tool Result] {}", toolName)
                             callback?.invoke(ClaudeStreamEvent.ToolResult(toolName))
                         }
                     }
                 }
                 "result" -> {
-                    val subtype = json.get("subtype")?.asText()
+                    val subtype = json.get("subtype")?.asString()
                     if (subtype == "success") {
                         val cost = json.get("total_cost_usd")?.asDouble() ?: 0.0
                         val turns = json.get("num_turns")?.asInt() ?: 0
                         logger.info("[Result] Completed: {} turns, cost \${}", turns, "%.4f".format(cost))
                         callback?.invoke(ClaudeStreamEvent.Complete(turns, cost))
                     } else if (subtype == "error") {
-                        val error = json.get("result")?.asText() ?: "Unknown error"
+                        val error = json.get("result")?.asString() ?: "Unknown error"
                         logger.warn("[Result] Error: {}", error.take(100))
                         callback?.invoke(ClaudeStreamEvent.Error(error))
                     }
@@ -662,14 +662,14 @@ class ClaudeCodeAgentExecutor(
         for (line in lines) {
             try {
                 val json = objectMapper.readTree(line)
-                val type = json.get("type")?.asText()
+                val type = json.get("type")?.asString()
 
                 if (type == "result") {
                     lastResult = objectMapper.treeToValue(json, ClaudeCodeJsonOutput::class.java)
                 }
 
                 // Capture session ID from any message that has it
-                json.get("session_id")?.asText()?.let { sessionId = it }
+                json.get("session_id")?.asString()?.let { sessionId = it }
             } catch (e: Exception) {
                 // Skip malformed lines
             }
@@ -971,8 +971,8 @@ class ClaudeCodeAgentExecutor(
                 try {
                     val tree = objectMapper.readTree(trimmed)
                     // Extract the first text value from the object
-                    tree.get("result")?.asText()
-                        ?: tree.fields().asSequence().firstOrNull()?.value?.asText()
+                    tree.get("result")?.asString()
+                        ?: tree.properties().firstOrNull()?.value?.asString()
                         ?: trimmed
                 } catch (_: Exception) {
                     trimmed
@@ -1019,9 +1019,11 @@ class ClaudeCodeAgentExecutor(
             return """{"type": "string"}"""
         }
         return try {
-            val config = objectMapper.serializationConfig
+            val config = objectMapper.serializationConfig()
             val javaType = objectMapper.constructType(clazz)
-            val beanDesc = config.introspect(javaType)
+            val classIntrospector = config.classIntrospectorInstance()
+            val annotatedClass = classIntrospector.introspectClassAnnotations(javaType)
+            val beanDesc = classIntrospector.introspectForSerialization(javaType, annotatedClass)
             val properties = mutableMapOf<String, Any>()
             val required = mutableListOf<String>()
 

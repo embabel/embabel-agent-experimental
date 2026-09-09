@@ -18,7 +18,8 @@ package com.embabel.agent.api.tool
 import com.embabel.agent.api.tool.Tool.Definition
 import com.embabel.agent.api.tool.progressive.UnfoldingTool
 import com.embabel.agent.core.DomainType
-import com.fasterxml.jackson.databind.ObjectMapper
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 
 /**
  * Tool information including definition and metadata,
@@ -417,7 +418,7 @@ interface Tool : ToolInfo {
 
         @JvmStatic
         fun fromInstance(instance: Any): List<Tool> =
-            super.fromInstance(instance, com.fasterxml.jackson.module.kotlin.jacksonObjectMapper())
+            super.fromInstance(instance, jacksonObjectMapper())
 
         @JvmStatic
         override fun fromInstance(
@@ -427,7 +428,7 @@ interface Tool : ToolInfo {
 
         @JvmStatic
         fun safelyFromInstance(instance: Any): List<Tool> =
-            super.safelyFromInstance(instance, com.fasterxml.jackson.module.kotlin.jacksonObjectMapper())
+            super.safelyFromInstance(instance, jacksonObjectMapper())
 
         @JvmStatic
         override fun safelyFromInstance(

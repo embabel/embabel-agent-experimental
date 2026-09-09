@@ -15,13 +15,11 @@
  */
 package com.embabel.agent.api.client.openapi
 
-import com.embabel.agent.api.client.ToolNames
 import com.embabel.agent.api.client.ApiCall
 import com.embabel.agent.api.client.ApiCallError
 import com.embabel.agent.api.client.ApiCallInterceptor
+import com.embabel.agent.api.client.ToolNames
 import com.embabel.agent.api.tool.Tool
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.swagger.v3.oas.models.Operation
 import io.swagger.v3.oas.models.PathItem
 import io.swagger.v3.oas.models.media.ArraySchema
@@ -36,8 +34,10 @@ import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientResponseException
 import org.springframework.web.util.UriComponentsBuilder
 import org.springframework.web.util.UriUtils
-import java.nio.charset.StandardCharsets
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.net.URI
+import java.nio.charset.StandardCharsets
 
 /**
  * A [Tool] that wraps a single OpenAPI operation, executing it via [RestClient].

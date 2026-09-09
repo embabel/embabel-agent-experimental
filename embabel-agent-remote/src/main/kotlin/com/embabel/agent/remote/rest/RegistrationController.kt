@@ -20,7 +20,6 @@ import com.embabel.agent.remote.action.RestAction
 import com.embabel.agent.remote.action.RestActionMetadata
 import com.embabel.agent.remote.action.RestServer
 import com.embabel.agent.remote.action.RestServerRegistration
-import com.fasterxml.jackson.databind.ObjectMapper
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.responses.ApiResponse
 import io.swagger.v3.oas.annotations.responses.ApiResponses
@@ -31,6 +30,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.client.RestClient
+import tools.jackson.databind.ObjectMapper
 
 @RestController
 @RequestMapping("/api/v1/remote")

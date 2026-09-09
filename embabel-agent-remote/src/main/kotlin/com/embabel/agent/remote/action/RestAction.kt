@@ -17,9 +17,9 @@ package com.embabel.agent.remote.action
 
 import com.embabel.agent.core.*
 import com.embabel.agent.core.support.AbstractAction
-import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.http.MediaType
 import org.springframework.web.client.RestClient
+import tools.jackson.databind.ObjectMapper
 
 /**
  * Exposes a remote REST endpoint described in the specs
