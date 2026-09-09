@@ -17,7 +17,7 @@ package com.embabel.agent.api.client.openapi
 
 import com.embabel.agent.api.client.*
 import com.embabel.agent.api.client.model.ApiModel
-import com.embabel.agent.api.client.model.canonicalOpId
+import com.embabel.agent.api.client.model.ApiOperation
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.agent.api.tool.progressive.UnfoldingTool
@@ -211,8 +211,9 @@ class OpenApiLearner(
                 // turn a typo in apis.yml into "tool quietly missing" hours
                 // later. Compare against the post-tag-filter model so an
                 // op-id that exists but was excluded by a tag also warns.
-                val present = tagFiltered.allOperations.map { it.name.canonicalOpId() }.toSet()
-                val missing = operationIds.filter { it.canonicalOpId() !in present }
+                val missing = operationIds.filter {
+                    tagFiltered.filterByOperationIds(setOf(it)).allOperations.isEmpty()
+                }
                 if (missing.isNotEmpty()) {
                     logger.warn(
                         "Requested operationIds not found in spec '{}': {}",
@@ -229,7 +230,14 @@ class OpenApiLearner(
             // from these operations only — uncurated ops' types get
             // dropped from the registry, which for big specs (Sheets,
             // Docs, GitHub) cuts the JSON the LLM has to load by ~95%.
-            val allTools = materializeTools(openApi, source, filtered.baseUrl, restClient, includedNames)
+            val allTools = materializeTools(
+                openApi,
+                source,
+                filtered.baseUrl,
+                restClient,
+                model.allOperations,
+                includedNames,
+            )
             val includedTools = allTools.filterKeys { it in includedNames }
 
             val toolsByResource = filtered.resources.associate { resource ->
@@ -434,9 +442,11 @@ class OpenApiLearner(
             source: String,
             baseUrl: String,
             restClient: RestClient,
+            modeledOperations: List<ApiOperation>,
             curatedOperationNames: Set<String>,
         ): Map<String, Tool> {
             val tools = mutableMapOf<String, Tool>()
+            val modeledByLocation = modeledOperations.associateBy { it.method.name to it.path }
             // Snapshot the named-types registry once so each operation's
             // `$ref` deref / output-schema serialization sees the same
             // map. `components.schemas` is preserved by both
@@ -465,9 +475,14 @@ class OpenApiLearner(
                         parameters = opParams + pathParams.filter { it.name !in existingNames }
                     }
                     val opBaseUrl = resolveServerUrl(mergedOperation.servers, source) ?: pathBaseUrl
-                    val name = OpenApiOperationTool.operationName(method, path, mergedOperation)
-                    mergedByName[name] = OperationLocation(path, method, mergedOperation, opBaseUrl)
-                    if (name in curatedOperationNames) curatedOps.add(mergedOperation)
+                    val modeledOperation = modeledByLocation[method.name to path]
+                        ?: error("No modeled operation for ${method.name} $path in '$source'")
+                    val previous = mergedByName.put(
+                        modeledOperation.name,
+                        OperationLocation(path, method, mergedOperation, opBaseUrl),
+                    )
+                    check(previous == null) { "Duplicate callable operation name '${modeledOperation.name}'" }
+                    if (modeledOperation.name in curatedOperationNames) curatedOps.add(mergedOperation)
                 }
             }
 
@@ -480,6 +495,7 @@ class OpenApiLearner(
 
             for ((name, location) in mergedByName) {
                 val tool = OpenApiOperationTool(
+                    callableName = name,
                     baseUrl = location.baseUrl,
                     path = location.path,
                     httpMethod = location.method,
@@ -488,7 +504,9 @@ class OpenApiLearner(
                     componentsSchemas = componentsSchemas,
                     namedTypesJson = namedTypesJson,
                 )
-                tools[tool.definition.name] = tool
+                check(tools.put(tool.definition.name, tool) == null) {
+                    "Duplicate materialized tool name '${tool.definition.name}'"
+                }
             }
 
             return tools
@@ -500,26 +518,5 @@ class OpenApiLearner(
             val operation: Operation,
             val baseUrl: String,
         )
-
-        private fun groupByTag(
-            openApi: OpenAPI,
-            tools: Map<String, Tool>,
-        ): Map<String, List<Tool>> {
-            val tagMap = mutableMapOf<String, MutableList<Tool>>()
-
-            openApi.paths?.forEach { (path, pathItem) ->
-                pathItem.readOperationsMap()?.forEach { (method, operation) ->
-                    val toolName = OpenApiOperationTool.operationName(method, path, operation)
-                    val tool = tools[toolName] ?: return@forEach
-
-                    val tags = operation.tags?.takeIf { it.isNotEmpty() } ?: listOf("default")
-                    tags.forEach { tag ->
-                        tagMap.getOrPut(tag) { mutableListOf() }.add(tool)
-                    }
-                }
-            }
-
-            return tagMap
-        }
     }
 }

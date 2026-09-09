@@ -23,6 +23,9 @@ import io.swagger.v3.oas.models.Operation
 import io.swagger.v3.oas.models.PathItem
 import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.parameters.Parameter
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.HexFormat
 
 /**
  * Converts a parsed Swagger [OpenAPI] object into an [ApiModel] IR,
@@ -76,6 +79,7 @@ internal object OpenApiModelBuilder {
 
                 operations.add(
                     ApiOperation(
+                        operationId = operation.operationId?.takeIf { it.isNotBlank() },
                         name = operationName(method, path, operation),
                         description = operationDescription(operation),
                         method = convertMethod(method),
@@ -89,7 +93,41 @@ internal object OpenApiModelBuilder {
             }
         }
 
-        return operations
+        return assignCallableNames(operations)
+    }
+
+    private fun assignCallableNames(operations: List<ApiOperation>): List<ApiOperation> {
+        val counts = operations.groupingBy { it.name }.eachCount()
+        val unchangedNames = operations.filter { counts.getValue(it.name) == 1 }.map { it.name }.toSet()
+        val colliding = operations.filter { counts.getValue(it.name) > 1 }
+        val readableCounts = colliding.groupingBy { readableCompositeName(it) }.eachCount()
+
+        return operations.map { operation ->
+            if (counts.getValue(operation.name) == 1) {
+                operation
+            } else {
+                val readableName = readableCompositeName(operation)
+                val name = if (readableCounts.getValue(readableName) == 1 && readableName !in unchangedNames) {
+                    readableName
+                } else {
+                    "${readableName}_${structuralSuffix(operation)}"
+                }
+                operation.copy(name = name)
+            }
+        }.also { named ->
+            val duplicates = named.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
+            check(duplicates.isEmpty()) {
+                "OpenAPI operations could not be assigned unique callable names: ${duplicates.sorted()}"
+            }
+        }
+    }
+
+    private fun readableCompositeName(operation: ApiOperation): String =
+        ToolNames.sanitize("${operation.name}_${operation.method.name.lowercase()}_${operation.path}")
+
+    private fun structuralSuffix(operation: ApiOperation): String {
+        val identity = "${operation.method.name} ${operation.path}".toByteArray(StandardCharsets.UTF_8)
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(identity)).take(8)
     }
 
     private fun groupIntoResources(
@@ -245,13 +283,26 @@ internal object OpenApiModelBuilder {
         }
     }
 
-    // --- Naming (delegates to existing logic in OpenApiOperationTool) ---
+    // --- Naming ---
 
-    private fun operationName(
+    internal fun operationName(
         method: PathItem.HttpMethod,
         path: String,
         operation: Operation,
-    ): String = OpenApiOperationTool.operationName(method, path, operation)
+    ): String {
+        if (!operation.operationId.isNullOrBlank()) {
+            return ToolNames.sanitize(operation.operationId)
+        }
+        val synthesized = path
+            .replace("{", "by_")
+            .replace("}", "")
+            .replace("/", "_")
+            .replace("-", "_")
+            .trimStart('_')
+            .trimEnd('_')
+            .replace("__", "_")
+        return ToolNames.sanitize("${method.name.lowercase()}_$synthesized")
+    }
 
     private fun operationDescription(operation: Operation): String =
         OpenApiOperationTool.operationDescription(operation)
@@ -278,6 +329,6 @@ internal object OpenApiModelBuilder {
         PathItem.HttpMethod.PATCH -> HttpMethod.PATCH
         PathItem.HttpMethod.HEAD -> HttpMethod.HEAD
         PathItem.HttpMethod.OPTIONS -> HttpMethod.OPTIONS
-        PathItem.HttpMethod.TRACE -> HttpMethod.GET
+        PathItem.HttpMethod.TRACE -> HttpMethod.TRACE
     }
 }

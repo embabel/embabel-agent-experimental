@@ -15,7 +15,6 @@
  */
 package com.embabel.agent.api.client.openapi
 
-import com.embabel.agent.api.client.ToolNames
 import com.embabel.agent.api.client.ApiCall
 import com.embabel.agent.api.client.ApiCallError
 import com.embabel.agent.api.client.ApiCallInterceptor
@@ -79,10 +78,11 @@ class OpenApiOperationTool(
      * choice belongs to whoever wires the client up, and the default preserves existing behaviour.
      */
     private val interceptors: List<ApiCallInterceptor> = emptyList(),
+    private val callableName: String = OpenApiModelBuilder.operationName(httpMethod, path, operation),
 ) : Tool {
 
     override val definition: Tool.Definition = Tool.Definition(
-        name = operationName(httpMethod, path, operation),
+        name = callableName,
         description = operationDescription(operation),
         inputSchema = buildInputSchema(operation, componentsSchemas),
     ).let { def ->
@@ -751,22 +751,7 @@ class OpenApiOperationTool(
             httpMethod: PathItem.HttpMethod,
             path: String,
             operation: Operation,
-        ): String {
-            // Prefer operationId if available
-            if (!operation.operationId.isNullOrBlank()) {
-                return ToolNames.sanitize(operation.operationId)
-            }
-            // Synthesize from method + path: GET /pets/{petId} → get_pets_by_petId
-            val synthesized = path
-                .replace("{", "by_")
-                .replace("}", "")
-                .replace("/", "_")
-                .replace("-", "_")
-                .trimStart('_')
-                .trimEnd('_')
-                .replace("__", "_")
-            return ToolNames.sanitize("${httpMethod.name.lowercase()}_$synthesized")
-        }
+        ): String = OpenApiModelBuilder.operationName(httpMethod, path, operation)
 
         internal fun operationDescription(operation: Operation): String {
             return listOfNotNull(
