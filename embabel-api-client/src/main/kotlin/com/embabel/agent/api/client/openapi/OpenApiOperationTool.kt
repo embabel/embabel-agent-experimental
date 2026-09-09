@@ -27,6 +27,7 @@ import io.swagger.v3.oas.models.media.ArraySchema
 import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.parameters.Parameter
 import org.slf4j.LoggerFactory
+import org.springframework.http.HttpMethod
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.util.LinkedMultiValueMap
@@ -489,6 +490,9 @@ class OpenApiOperationTool(
             PathItem.HttpMethod.POST -> executeWithBody(restClient.post().uri(uri).withDeclaredHeaders(), body)
             PathItem.HttpMethod.PUT -> executeWithBody(restClient.put().uri(uri).withDeclaredHeaders(), body)
             PathItem.HttpMethod.PATCH -> executeWithBody(restClient.patch().uri(uri).withDeclaredHeaders(), body)
+            PathItem.HttpMethod.TRACE -> restClient.method(HttpMethod.TRACE).uri(uri)
+                .withDeclaredHeaders()
+                .retrieve().toEntity(String::class.java)
 
             else -> throw UnsupportedOperationException("HTTP method $httpMethod not supported")
         }

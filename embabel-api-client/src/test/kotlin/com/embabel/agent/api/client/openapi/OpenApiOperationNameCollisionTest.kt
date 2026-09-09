@@ -162,7 +162,8 @@ class OpenApiOperationNameCollisionTest {
                   "paths": {
                     "/records": {
                       "get": { "operationId": "read.record", "responses": { "204": { "description": "ok" } } },
-                      "post": { "operationId": "read/record", "responses": { "204": { "description": "ok" } } }
+                      "post": { "operationId": "read/record", "responses": { "204": { "description": "ok" } } },
+                      "trace": { "operationId": "read-record", "responses": { "204": { "description": "ok" } } }
                     }
                   }
                 }
@@ -174,8 +175,9 @@ class OpenApiOperationNameCollisionTest {
 
             tools.getValue("read_record_get_records").call("")
             tools.getValue("read_record_post_records").call("")
+            tools.getValue("read-record").call("")
 
-            assertEquals(listOf("GET /records", "POST /records"), requests)
+            assertEquals(listOf("GET /records", "POST /records", "TRACE /records"), requests)
         } finally {
             server.stop(0)
         }
