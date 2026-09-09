@@ -123,7 +123,7 @@ internal object OpenApiModelBuilder {
     }
 
     private fun readableCompositeName(operation: ApiOperation): String =
-        ToolNames.sanitize("${operation.name}_${operation.method.name.lowercase()}_${operation.path}")
+        ToolNames.sanitize("${operation.name}_${operation.method.name.lowercase()}_${pathName(operation.path)}")
 
     private fun structuralSuffix(operation: ApiOperation): String {
         val identity = "${operation.method.name} ${operation.path}".toByteArray(StandardCharsets.UTF_8)
@@ -293,16 +293,16 @@ internal object OpenApiModelBuilder {
         if (!operation.operationId.isNullOrBlank()) {
             return ToolNames.sanitize(operation.operationId)
         }
-        val synthesized = path
-            .replace("{", "by_")
-            .replace("}", "")
-            .replace("/", "_")
-            .replace("-", "_")
-            .trimStart('_')
-            .trimEnd('_')
-            .replace("__", "_")
-        return ToolNames.sanitize("${method.name.lowercase()}_$synthesized")
+        return ToolNames.sanitize("${method.name.lowercase()}_${pathName(path)}")
     }
+
+    private fun pathName(path: String): String = path
+        .replace("{", "by_")
+        .replace("}", "")
+        .replace("/", "_")
+        .replace("-", "_")
+        .trim('_')
+        .replace("__", "_")
 
     private fun operationDescription(operation: Operation): String =
         OpenApiOperationTool.operationDescription(operation)

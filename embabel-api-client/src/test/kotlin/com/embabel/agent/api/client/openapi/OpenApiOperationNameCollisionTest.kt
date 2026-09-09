@@ -42,6 +42,28 @@ class OpenApiOperationNameCollisionTest {
     }
 
     @Test
+    fun `path parameters remain distinct from literal segments in callable names`() {
+        val spec = """
+            {
+              "openapi": "3.0.3",
+              "info": { "title": "Paths", "version": "1.0.0" },
+              "paths": {
+                "/pets/{id}": { "get": { "operationId": "find.record", "responses": { "200": { "description": "ok" } } } },
+                "/pets/id": { "get": { "operationId": "find/record", "responses": { "200": { "description": "ok" } } } }
+              }
+            }
+        """.trimIndent()
+
+        assertEquals(
+            mapOf(
+                "/pets/{id}" to "find_record_get_pets_by_id",
+                "/pets/id" to "find_record_get_pets_id",
+            ),
+            buildModel(spec).allOperations.associate { it.path to it.name },
+        )
+    }
+
+    @Test
     fun `operation with multiple tags remains one modeled operation`() {
         val model = buildModel(collisionSpec(catFirst = true))
 
