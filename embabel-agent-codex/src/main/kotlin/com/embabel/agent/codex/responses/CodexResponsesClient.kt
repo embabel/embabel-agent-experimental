@@ -15,6 +15,7 @@
  */
 package com.embabel.agent.codex.responses
 
+import com.embabel.agent.codex.auth.CodexAuthException
 import com.embabel.agent.codex.auth.CodexAccessTokenProvider
 import com.embabel.agent.codex.auth.CodexCredentials
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
@@ -22,6 +23,9 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
+import org.springframework.ai.chat.metadata.DefaultUsage
+import org.springframework.ai.chat.metadata.Usage
+import org.springframework.ai.retry.NonTransientAiException
 import org.springframework.web.client.HttpClientErrorException
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -43,6 +47,9 @@ private data class OutputItem(
 @JsonIgnoreProperties(ignoreUnknown = true)
 private data class ResponsesApiResponse(
     val output: List<OutputItem>? = null,
+    val usage: JsonNode? = null,
+    val id: String? = null,
+    val model: String? = null,
     val error: ResponseError? = null,
 )
 
@@ -74,7 +81,11 @@ class CodexResponsesClient(
             doCreate(model, input, tools, instructions, maxOutputTokens, temperature, topP, reasoningEffort)
         } catch (e: HttpClientErrorException.Unauthorized) {
             tokenProvider.invalidateAndRefresh()
-            doCreate(model, input, tools, instructions, maxOutputTokens, temperature, topP, reasoningEffort)
+            try {
+                doCreate(model, input, tools, instructions, maxOutputTokens, temperature, topP, reasoningEffort)
+            } catch (stillUnauthorized: HttpClientErrorException.Unauthorized) {
+                throw CodexAuthException("Codex rejected refreshed credentials; run device login again", stillUnauthorized)
+            }
         }
     }
 
@@ -95,7 +106,13 @@ class CodexResponsesClient(
             "Accept" to "text/event-stream",
         )
         val url = "${credentials.baseUrl.trimEnd('/')}/responses"
-        val raw = transport.post(url, headers, requestBody)
+        val raw = try {
+            transport.post(url, headers, requestBody)
+        } catch (e: HttpClientErrorException) {
+            // Let the explicit 401 refresh path and the core rate-limit policy run.
+            if (e.statusCode.value() == 401 || e.statusCode.value() == 429) throw e
+            throw NonTransientAiException("Codex request rejected: ${e.message}", e)
+        }
         return parseRaw(raw)
     }
 
@@ -143,13 +160,17 @@ class CodexResponsesClient(
                 val name = item.name ?: return@mapNotNull null
                 FunctionCall(name = name, arguments = item.arguments ?: "{}", callId = item.callId)
             }
-        return CodexResponse(outputText = textParts.joinToString("\n"), functionCalls = functionCalls, raw = raw)
+        return CodexResponse(outputText = textParts.joinToString("\n"), functionCalls = functionCalls, raw = raw,
+            usage = parseUsage(response.usage), id = response.id, model = response.model)
     }
 
     private fun parseSseResponse(raw: String): CodexResponse {
         val deltas = mutableListOf<String>()
         var completedText: String? = null
         var completed = false
+        var usage: Usage? = null
+        var responseId: String? = null
+        var responseModel: String? = null
         val functionCalls = mutableListOf<FunctionCall>()
         val normalized = raw.replace("\r\n", "\n")
 
@@ -175,6 +196,9 @@ class CodexResponsesClient(
                     completed = true
                     val responseNode = node.path("response")
                     responseError(responseNode)?.let { throw responseFailure(it) }
+                    usage = parseUsage(responseNode.get("usage"))
+                    responseId = responseNode.path("id").asText(null)
+                    responseModel = responseNode.path("model").asText(null)
                     completedText = extractCompletedText(responseNode)
                     functionCalls += extractFunctionCalls(responseNode.path("output"))
                 }
@@ -190,7 +214,20 @@ class CodexResponsesClient(
         }
 
         val outputText = completedText?.takeIf { it.isNotBlank() } ?: deltas.joinToString("")
-        return CodexResponse(outputText = outputText, functionCalls = functionCalls, raw = raw)
+        return CodexResponse(outputText = outputText, functionCalls = functionCalls, raw = raw,
+            usage = usage, id = responseId, model = responseModel)
+    }
+
+    private fun parseUsage(node: JsonNode?): Usage? {
+        if (node == null || node.isNull) return null
+        return DefaultUsage(
+            node.get("input_tokens")?.intValue(),
+            node.get("output_tokens")?.intValue(),
+            node.get("total_tokens")?.intValue(),
+            node,
+            node.path("input_tokens_details").get("cached_tokens")?.longValue(),
+            null,
+        )
     }
 
     private fun responseError(node: JsonNode): ResponseError? {

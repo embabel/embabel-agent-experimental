@@ -15,9 +15,9 @@
  */
 package com.embabel.agent.codex.auth
 
+import org.springframework.web.client.RestClientException
 import java.time.Duration
 import java.time.Instant
-import java.util.Base64
 
 private val TOKEN_EXPIRY_THRESHOLD: Duration = Duration.ofMinutes(50)
 private val REFRESH_SKEW: Duration = Duration.ofMinutes(2)
@@ -54,11 +54,17 @@ class CodexAccessTokenProvider(
         return try {
             refreshAndStore(force = false)
         } catch (e: CodexAuthException) {
-            if (credentials.accessToken.isNotBlank() && !isAccessTokenExpired(credentials.accessToken)) {
-                credentials
-            } else {
-                throw e
-            }
+            fallbackOrThrow(credentials, e)
+        } catch (e: RestClientException) {
+            fallbackOrThrow(credentials, e)
+        }
+    }
+
+    private fun fallbackOrThrow(credentials: CodexCredentials, e: RuntimeException): CodexCredentials {
+        return if (credentials.accessToken.isNotBlank() && !isAccessTokenExpired(credentials.accessToken)) {
+            credentials
+        } else {
+            throw e
         }
     }
 
@@ -77,15 +83,9 @@ class CodexAccessTokenProvider(
 
     companion object {
         internal fun jwtExpiry(accessToken: String): Instant? {
-            val parts = accessToken.split('.')
-            if (parts.size < 2) return null
-            return try {
-                val payload = String(Base64.getUrlDecoder().decode(pad(parts[1])))
-                val expMatch = Regex("\"exp\"\\s*:\\s*(\\d+)").find(payload) ?: return null
-                Instant.ofEpochSecond(expMatch.groupValues[1].toLong())
-            } catch (_: Exception) {
-                null
-            }
+            val exp = CodexJwtClaims.payload(accessToken)?.get("exp") ?: return null
+            if (!exp.isIntegralNumber || !exp.canConvertToLong()) return null
+            return runCatching { Instant.ofEpochSecond(exp.longValue()) }.getOrNull()
         }
 
         private fun isAccessTokenExpired(accessToken: String): Boolean {
@@ -93,9 +93,5 @@ class CodexAccessTokenProvider(
             return Instant.now().isAfter(exp)
         }
 
-        private fun pad(value: String): String {
-            val rem = value.length % 4
-            return if (rem == 0) value else value + "=".repeat(4 - rem)
-        }
     }
 }

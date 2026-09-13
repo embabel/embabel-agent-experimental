@@ -15,17 +15,18 @@
  */
 package com.embabel.agent.codex.chat
 
-import com.embabel.agent.codex.auth.CodexAuthException
 import com.embabel.agent.codex.responses.CodexPromptConverter
 import com.embabel.agent.codex.responses.CodexResponse
 import com.embabel.agent.codex.responses.CodexResponsesClient
 import com.embabel.agent.codex.responses.CodexToolConverter
 import org.springframework.ai.chat.messages.AssistantMessage
+import org.springframework.ai.chat.metadata.ChatResponseMetadata
 import org.springframework.ai.chat.model.ChatModel
 import org.springframework.ai.chat.model.ChatResponse
 import org.springframework.ai.chat.model.Generation
 import org.springframework.ai.chat.prompt.ChatOptions
 import org.springframework.ai.chat.prompt.Prompt
+import org.springframework.ai.model.tool.ToolCallingChatOptions
 import org.springframework.core.retry.RetryException
 import org.springframework.core.retry.RetryPolicy
 import org.springframework.core.retry.RetryTemplate
@@ -35,14 +36,14 @@ class CodexChatModel(
     private val model: String,
     private val defaultOptions: CodexChatOptions = CodexChatOptions(modelName = model),
     private val retryTemplate: RetryTemplate = RetryTemplate(
-        RetryPolicy.builder().excludes(CodexAuthException::class.java).build()
+        RetryPolicy.withMaxRetries(0)
     ),
 ) : ChatModel {
 
     override fun call(prompt: Prompt): ChatResponse {
         val conversion = CodexPromptConverter.convert(prompt.instructions)
-        val tools = CodexToolConverter.fromPromptOptions(prompt.options)
         val options = resolveOptions(prompt.options)
+        val tools = CodexToolConverter.fromPromptOptions(options)
         val effectiveModel = options.model ?: model
         val codexResponse = try {
             retryTemplate.execute<CodexResponse> {
@@ -78,7 +79,11 @@ class CodexChatModel(
                 .toolCalls(toolCalls)
                 .build()
         }
-        return ChatResponse(listOf(Generation(assistantMessage)))
+        val metadata = ChatResponseMetadata.builder()
+        codexResponse.usage?.let { metadata.usage(it) }
+        codexResponse.id?.let { metadata.id(it) }
+        codexResponse.model?.let { metadata.model(it) }
+        return ChatResponse(listOf(Generation(assistantMessage)), metadata.build())
     }
 
     override fun getDefaultOptions(): ChatOptions = defaultOptions
@@ -91,6 +96,12 @@ class CodexChatModel(
             maxTokens = options.maxTokens ?: defaultOptions.maxTokens,
             topP = options.topP ?: defaultOptions.topP,
             reasoningEffort = (options as? CodexChatOptions)?.reasoningEffort ?: defaultOptions.reasoningEffort,
+            toolCallbacks = ToolCallingChatOptions.mergeToolCallbacks(
+                (options as? ToolCallingChatOptions)?.toolCallbacks, defaultOptions.toolCallbacks,
+            ).orEmpty(),
+            toolContext = ToolCallingChatOptions.mergeToolContext(
+                (options as? ToolCallingChatOptions)?.toolContext, defaultOptions.toolContext,
+            ).orEmpty(),
         )
     }
 }

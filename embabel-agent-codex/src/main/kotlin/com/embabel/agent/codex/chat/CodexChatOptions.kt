@@ -18,7 +18,9 @@ package com.embabel.agent.codex.chat
 import com.embabel.agent.codex.responses.CodexReasoningEffort
 
 import org.springframework.ai.chat.prompt.ChatOptions
-import org.springframework.ai.chat.prompt.DefaultChatOptionsBuilder
+import org.springframework.ai.model.tool.DefaultToolCallingChatOptions
+import org.springframework.ai.model.tool.ToolCallingChatOptions
+import org.springframework.ai.tool.ToolCallback
 
 data class CodexChatOptions(
     private val modelName: String? = null,
@@ -30,7 +32,11 @@ data class CodexChatOptions(
     private val presencePenalty: Double? = null,
     private val stopSequences: List<String>? = null,
     private val topK: Int? = null,
-) : ChatOptions {
+    private val toolCallbacks: List<ToolCallback> = emptyList(),
+    private val toolContext: Map<String, Any> = emptyMap(),
+) : ToolCallingChatOptions {
+    override fun getToolCallbacks(): List<ToolCallback> = toolCallbacks
+    override fun getToolContext(): Map<String, Any> = toolContext
     override fun getModel(): String? = modelName
     override fun getTemperature(): Double? = temperature
     override fun getMaxTokens(): Int? = maxTokens
@@ -42,7 +48,7 @@ data class CodexChatOptions(
 
     override fun mutate(): Builder = Builder(this)
 
-    class Builder internal constructor(options: CodexChatOptions) : DefaultChatOptionsBuilder<Builder>() {
+    class Builder internal constructor(options: CodexChatOptions) : DefaultToolCallingChatOptions.Builder<Builder>() {
         private var effort: CodexReasoningEffort? = options.reasoningEffort
 
         init {
@@ -54,6 +60,8 @@ data class CodexChatOptions(
             presencePenalty(options.presencePenalty)
             stopSequences(options.stopSequences)
             topK(options.topK)
+            toolCallbacks(options.toolCallbacks)
+            toolContext(options.toolContext)
         }
 
         fun reasoningEffort(value: CodexReasoningEffort?): Builder = apply { effort = value }
@@ -70,6 +78,8 @@ data class CodexChatOptions(
                 presencePenalty = portable.presencePenalty,
                 stopSequences = portable.stopSequences?.toList(),
                 topK = portable.topK,
+                toolCallbacks = portable.toolCallbacks.orEmpty().toList(),
+                toolContext = portable.toolContext.orEmpty().toMap(),
             )
         }
 

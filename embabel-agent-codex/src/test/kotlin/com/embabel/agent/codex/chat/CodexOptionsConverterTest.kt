@@ -15,13 +15,14 @@
  */
 package com.embabel.agent.codex.chat
 
+import com.embabel.agent.test.models.OptionsConverterTestSupport
 import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.ai.model.OptionsConverter
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
-class CodexOptionsConverterTest {
+class CodexOptionsConverterTest : OptionsConverterTestSupport(CodexOptionsConverter) {
 
     @Nested
     inner class ConvertOptions {

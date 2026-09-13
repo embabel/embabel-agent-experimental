@@ -15,4 +15,6 @@
  */
 package com.embabel.agent.codex.auth
 
-class CodexAuthException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+import com.embabel.agent.core.NonRetryable
+
+class CodexAuthException(message: String, cause: Throwable? = null) : RuntimeException(message, cause), NonRetryable

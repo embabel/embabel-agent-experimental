@@ -46,8 +46,10 @@ Applications decide how to display the verification URL and code.
 
 If the token endpoint reports `invalid_refresh_token` or `refresh_token_reused`,
 repeat device login to replace the Embabel session. Changing the model cannot fix
-an authentication failure. The default chat retry policy does not retry
-`CodexAuthException`; applications can provide their own retry policy.
+an authentication failure. The default ChatModel makes one attempt so Embabel's outer retry policy owns
+retries. `CodexAuthException` implements core `NonRetryable`; temporary refresh
+network failures, 429 and 5xx remain retryable. Applications using the ChatModel
+standalone may supply a retry template explicitly.
 
 Share one `CodexAccessTokenProvider` within an application. Its refresh lock is
 per instance, not cross-process: do not run multiple processes against the same
@@ -69,6 +71,38 @@ val response = chatModel.call(Prompt("Hello from Embabel"))
 
 Set `EMBABEL_CODEX_MODEL` to a model available to the authenticated subscription.
 The module does not publish a fixed model catalog.
+
+## Embabel core integration
+
+Wrap the ChatModel with the existing core service and register that service with
+your application's model provider:
+
+```kotlin
+val service = SpringAiLlmService(
+    name = modelId,
+    provider = "codex",
+    chatModel = chatModel,
+    optionsConverter = CodexOptionsConverter,
+)
+val sender = service.createMessageSender(
+    LlmOptions(model = modelId).withCodexReasoningEffort(CodexReasoningEffort.HIGH)
+)
+val response = sender.call(
+    listOf(com.embabel.chat.UserMessage("Hello from Embabel")),
+    emptyList(), // Supply Embabel Tool instances here when needed.
+)
+println(response.textContent)
+println(response.usage)
+```
+
+Core owns tool execution; this adapter only sends definitions and returns calls.
+Responses map identity, model and token usage into Spring AI metadata, including
+cached input tokens and the native usage details. Core's message sender can then
+consume that usage without a Codex-specific accounting API.
+
+The root POM explicitly imports the core BOM using `embabel-agent.version`.
+The experimental artifact revision is independent and must not select the core
+BOM implicitly via the parent's `${project.version}` expression.
 
 ## Thinking levels
 
@@ -95,12 +129,14 @@ module does not silently downgrade unsupported efforts. A generic thinking token
 budget is not converted to effort because the two controls are not equivalent.
 
 `mutate()`, builder cloning, and `combineWith()` preserve Codex effort. The builder
-extends Spring AI's `DefaultChatOptionsBuilder` for portable option handling.
+extends Spring AI's `DefaultToolCallingChatOptions.Builder` so core can attach
+tools without dropping provider-specific effort or tool context.
 
 To run a live matrix in one Maven invocation (sequential requests):
 
 ```bash
 EMBABEL_LIVE_CODEX=1 \
+EMBABEL_CODEX_LIVE_TOOLS=1 \
 EMBABEL_CODEX_MODEL=gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-6-astra \
 EMBABEL_CODEX_REASONING_EFFORT=low,medium,high,xhigh,max \
   mvn -pl embabel-agent-codex -Dtest=CodexLiveIT test
@@ -112,6 +148,9 @@ Verified on 2026-09-13 with this subscription: Sol, Terra and Luna accepted
 `ultra` as an invalid wire value, so it is deliberately not in this enum even
 when a Codex UI exposes an Ultra mode.
 
+The live test uses the real core message sender and requires token usage.
+`EMBABEL_CODEX_LIVE_TOOLS=1` additionally attaches an unused tool definition,
+checking that provider options survive core tool wiring without executing tools.
 Each model/effort pair is a separate test. Include `none,minimal` to probe those
 levels as well; a model may reject them. Passing establishes request acceptance
 and text completion, not comparative reasoning quality or identical behavior

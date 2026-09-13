@@ -15,6 +15,8 @@
  */
 package com.embabel.agent.codex.responses
 
+import org.springframework.ai.chat.metadata.Usage
+
 data class FunctionCall(
     val name: String,
     val arguments: String,
@@ -25,6 +27,9 @@ data class CodexResponse(
     val outputText: String,
     val functionCalls: List<FunctionCall> = emptyList(),
     val raw: String,
+    val usage: Usage? = null,
+    val id: String? = null,
+    val model: String? = null,
 )
 
 class CodexResponseException(

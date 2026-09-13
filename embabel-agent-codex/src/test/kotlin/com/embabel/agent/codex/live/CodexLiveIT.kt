@@ -19,7 +19,11 @@ import com.embabel.agent.codex.auth.CodexAccessTokenProvider
 import com.embabel.agent.codex.auth.CodexTokenRefresher
 import com.embabel.agent.codex.auth.FileCodexAuthStore
 import com.embabel.agent.codex.auth.defaultEmbabelCodexPath
-import com.embabel.agent.codex.chat.CodexChatOptions
+import com.embabel.agent.codex.chat.CodexOptionsConverter
+import com.embabel.agent.codex.chat.withCodexReasoningEffort
+import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.spi.support.springai.SpringAiLlmService
+import com.embabel.common.ai.model.LlmOptions
 import com.embabel.agent.codex.responses.CodexReasoningEffort
 import com.embabel.agent.codex.chat.CodexChatModel
 import com.embabel.agent.codex.responses.CodexResponsesClient
@@ -29,14 +33,12 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.MethodSource
 import org.junit.jupiter.params.provider.Arguments
-import org.springframework.core.retry.RetryPolicy
-import org.springframework.core.retry.RetryTemplate
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
-import org.springframework.ai.chat.messages.UserMessage
-import org.springframework.ai.chat.prompt.Prompt
+import com.embabel.chat.UserMessage
 import java.nio.file.Path
 import kotlin.io.path.exists
 import kotlin.test.assertTrue
+import kotlin.test.assertNotNull
 
 @EnabledIfEnvironmentVariable(named = "EMBABEL_LIVE_CODEX", matches = "1")
 class CodexLiveIT {
@@ -54,14 +56,20 @@ class CodexLiveIT {
         val credentials = requireNotNull(store.load()) { "Invalid Embabel Codex auth file: $storePath" }
         val tokenProvider = CodexAccessTokenProvider(store, CodexTokenRefresher())
         val client = CodexResponsesClient(tokenProvider, credentials, RestClientCodexHttpTransport())
-        val chatModel = CodexChatModel(
-            client, model, CodexChatOptions(reasoningEffort = effort),
-            RetryTemplate(RetryPolicy.withMaxRetries(0)),
+        val service = SpringAiLlmService(model, "codex", CodexChatModel(client, model), CodexOptionsConverter)
+        val options = effort?.let { LlmOptions(model = model).withCodexReasoningEffort(it) } ?: LlmOptions(model = model)
+        val tools = if (System.getenv("EMBABEL_CODEX_LIVE_TOOLS") == "1") {
+            listOf(Tool.create("unused_lookup", "Optional lookup not needed for this request") {
+                error("Core sender must not execute tools")
+            })
+        } else emptyList()
+        val response = service.createMessageSender(options).call(
+            listOf(UserMessage("Do not call tools. Reply with exactly: EMBABEL_CODEX_OK")), tools,
         )
-        val response = chatModel.call(
-            Prompt(listOf(UserMessage("Reply with exactly: EMBABEL_CODEX_OK")))
-        )
-        val text = response.result?.output?.text.orEmpty()
+        val text = response.textContent
+        val usage = assertNotNull(response.usage, "Live response should provide token usage")
+        assertTrue((usage.promptTokens ?: 0) > 0)
+        assertTrue((usage.completionTokens ?: 0) > 0)
         assertTrue(
             text.contains("EMBABEL_CODEX_OK", ignoreCase = true),
             "Unexpected model response for $model / $effort (len=${text.length}): ${text.take(200)}"

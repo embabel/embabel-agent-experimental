@@ -47,6 +47,8 @@ class CodexTokenRefresher(
                 .body<String>()
                 ?: throw CodexAuthException("Empty response from token endpoint")
         } catch (e: RestClientResponseException) {
+            // Temporary endpoint failures remain retryable by the caller/core policy.
+            if (e.statusCode.value() == 429 || e.statusCode.is5xxServerError) throw e
             throw refreshFailure(e.responseBodyAsString, e)
         }
 
