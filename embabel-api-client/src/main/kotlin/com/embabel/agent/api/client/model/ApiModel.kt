@@ -150,6 +150,7 @@ sealed interface ApiSchema {
         val format: String? = null,
         val enumValues: List<String>? = null,
         override val description: String? = null,
+        val defaultValue: Any? = null,
     ) : ApiSchema
 
     data class Object(
