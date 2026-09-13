@@ -16,6 +16,7 @@
 
     <properties>
         <revision>1.5.1-SNAPSHOT</revision>
+        <embabel-agent.version>1.5.2-SNAPSHOT</embabel-agent.version>
         <victools.version>5.0.0</victools.version>
     </properties>
     <name>Embabel Example Agent Experimental</name>
@@ -33,6 +34,19 @@
         <module>embabel-api-client</module>
         <module>embabel-experimental-integration-tests</module>
     </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Core versions must not inherit this reactor's independent revision. -->
+            <dependency>
+                <groupId>com.embabel.agent</groupId>
+                <artifactId>embabel-agent-dependencies</artifactId>
+                <version>${embabel-agent.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <scm>
         <url>https://github.com/embabel/embabel-agent-experimental</url>
