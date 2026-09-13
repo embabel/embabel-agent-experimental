@@ -48,7 +48,9 @@ If the token endpoint reports `invalid_refresh_token` or `refresh_token_reused`,
 repeat device login to replace the Embabel session. Changing the model cannot fix
 an authentication failure. The default ChatModel makes one attempt so Embabel's outer retry policy owns
 retries. `CodexAuthException` implements core `NonRetryable`; temporary refresh
-network failures, 429 and 5xx remain retryable. Applications using the ChatModel
+network failures, 429 and 5xx remain retryable. JSON/SSE response errors preserve
+the provider code; recognized terminal auth/request errors implement `NonRetryable`,
+while server and rate-limit errors remain retryable. Applications using the ChatModel
 standalone may supply a retry template explicitly.
 
 Share one `CodexAccessTokenProvider` within an application. Its refresh lock is
@@ -165,6 +167,7 @@ across providers.
   does not turn a subscription into API credit.
 - Responses are requested as SSE but the current `ChatModel` aggregates the stream
   before returning. It does not expose token-by-token reactive streaming.
+- Prompts are text-only. Media inputs fail explicitly before any request is sent.
 - The module provides the reusable core only. Auto-configuration and a starter are
   outside the first contribution.
 
@@ -197,11 +200,16 @@ Run a small annotated translation agent through the real core planner and
 EMBABEL_LIVE_CODEX=1 mvn -pl embabel-agent-codex -Dtest=CodexGoalLiveIT test
 ```
 
-This test fixes the model to `gpt-5.6-luna` with `low` effort. Its goal is to
-translate French `chat` into English `cat`. It asserts a completed process,
-the translated result, exactly one recorded LLM invocation and nonzero usage.
-It is opt-in; when enabled, missing credentials fail the test. It does not
-start an interactive shell or test tool execution.
+This test fixes the model to `gpt-5.6-luna` with `low` effort and runs two cases:
+
+- Translate French `chat` into English `cat` with one HTTP request.
+- Call `lookup_code` once and return its fresh random verification code, with
+  two HTTP requests. The code is never included in the prompt. The test checks
+  tool execution, matching call IDs and the tool result in the follow-up request.
+
+Both cases assert a completed process, the exact answer and nonzero usage.
+They are opt-in; when enabled, missing credentials fail the test. This does not
+start an interactive shell.
 
 ## Prior art
 

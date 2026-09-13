@@ -19,6 +19,7 @@ import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.codex.auth.CodexAccessTokenProvider
 import com.embabel.agent.codex.auth.CodexAuthException
 import com.embabel.agent.codex.auth.CodexCredentials
+import com.embabel.agent.codex.responses.CodexResponseException
 import com.embabel.agent.codex.responses.CodexHttpTransport
 import com.embabel.agent.codex.responses.CodexResponsesClient
 import com.embabel.agent.codex.responses.CodexReasoningEffort
@@ -118,6 +119,33 @@ class CodexCoreIntegrationTest {
 
     @Nested
     inner class CoreRetry {
+        @Test
+        fun `core distinguishes terminal and transient response body failures`() {
+            every { tokens.accessToken() } returns "token"
+            for (code in listOf("access_denied", "invalid_request_error", "server_error", "rate_limit_exceeded")) {
+                for (format in listOf("json", "sse", "error-event")) {
+                    var attempts = 0
+                    val errorBody = """{"error":{"code":"$code","message":"Fixture failure"}}"""
+                    val body = when (format) {
+                        "json" -> errorBody
+                        "sse" -> "data: {\"type\":\"response.failed\",\"response\":$errorBody}\n\n"
+                        else -> "data: {\"type\":\"error\",\"code\":\"$code\",\"message\":\"Fixture failure\"}\n\n"
+                    }
+                    val client = CodexResponsesClient(tokens, credentials, CodexHttpTransport { _, _, _ ->
+                        attempts++
+                        body
+                    })
+                    val failure = assertFailsWith<RetryException> {
+                        retry.coreRetryTemplate("codex").execute { CodexChatModel(client, "model").call(Prompt("hello")) }
+                    }
+                    val responseError = assertIs<CodexResponseException>(failure.cause)
+                    assertEquals(code, responseError.code)
+                    val terminal = code == "access_denied" || code == "invalid_request_error"
+                    assertEquals(if (terminal) 1 else 3, attempts, "$format / $code")
+                }
+            }
+        }
+
         @Test
         fun `stops after a refreshed credential is still rejected`() {
             every { tokens.accessToken() } returns "token"

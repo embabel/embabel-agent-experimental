@@ -221,6 +221,24 @@ class CodexResponsesClientTest {
         }
 
         @Test
+        fun `retains completed tool items when final output is empty and deduplicates repeated calls`() {
+            every { tokenProvider.accessToken() } returns "tok"
+            // Captured Luna event shape: tool item is emitted before an empty completed output.
+            val call = """{"type":"function_call","name":"lookup","arguments":"{}","call_id":"call_1"}"""
+            for (output in listOf("[]", "[$call]")) {
+                val raw = """
+                    data: {"type":"response.output_item.done","item":$call}
+
+                    data: {"type":"response.completed","response":{"output":$output}}
+
+                """.trimIndent()
+                val client = CodexResponsesClient(tokenProvider, credentials, CodexHttpTransport { _, _, _ -> raw })
+                val result = client.create("model", emptyList())
+                assertEquals(listOf(FunctionCall("lookup", "{}", "call_1")), result.functionCalls)
+            }
+        }
+
+        @Test
         fun `throws when JSON response contains an error`() {
             every { tokenProvider.accessToken() } returns "tok"
             val transport = CodexHttpTransport { _, _, _ ->

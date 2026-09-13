@@ -21,6 +21,10 @@ import org.springframework.ai.chat.messages.AssistantMessage
 import org.springframework.ai.chat.messages.SystemMessage
 import org.springframework.ai.chat.messages.ToolResponseMessage
 import org.springframework.ai.chat.messages.UserMessage
+import kotlin.test.assertFailsWith
+import org.springframework.ai.content.Media
+import org.springframework.util.MimeTypeUtils
+import java.net.URI
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -29,6 +33,16 @@ class CodexPromptConverterTest {
 
     @Nested
     inner class ConvertMessages {
+        @Test
+        fun `rejects media rather than silently sending only text`() {
+            val message = UserMessage.builder().text("Describe this image")
+                .media(Media(MimeTypeUtils.IMAGE_PNG, URI.create("https://example.invalid/image.png"))).build()
+            val failure = assertFailsWith<IllegalArgumentException> {
+                CodexPromptConverter.convert(listOf(message))
+            }
+            assertTrue(failure.message.orEmpty().contains("text-only"))
+        }
+
 
         @Test
         fun `converts user message to input item`() {

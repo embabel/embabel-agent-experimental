@@ -16,6 +16,7 @@
 package com.embabel.agent.codex.responses
 
 import org.springframework.ai.chat.metadata.Usage
+import com.embabel.agent.core.NonRetryable
 
 data class FunctionCall(
     val name: String,
@@ -32,7 +33,11 @@ data class CodexResponse(
     val model: String? = null,
 )
 
-class CodexResponseException(
+open class CodexResponseException(
     message: String,
     cause: Throwable? = null,
+    val code: String? = null,
 ) : RuntimeException(message, cause)
+
+class CodexTerminalResponseException(message: String, code: String?) :
+    CodexResponseException(message, code = code), NonRetryable

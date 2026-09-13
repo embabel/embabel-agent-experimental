@@ -29,6 +29,9 @@ data class CodexPromptConversion(
 object CodexPromptConverter {
 
     fun convert(messages: List<Message>): CodexPromptConversion {
+        require(messages.filterIsInstance<UserMessage>().all { it.media.isEmpty() }) {
+            "Codex currently supports text-only prompts; media must not be silently discarded"
+        }
         val instructions = messages
             .filterIsInstance<SystemMessage>()
             .map { it.text }

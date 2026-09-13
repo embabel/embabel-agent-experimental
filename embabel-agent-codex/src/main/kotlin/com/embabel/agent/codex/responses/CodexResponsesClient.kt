@@ -57,6 +57,7 @@ private data class ResponsesApiResponse(
 private data class ResponseError(
     val message: String? = null,
     val code: String? = null,
+    val type: String? = null,
 )
 
 class CodexResponsesClient(
@@ -192,6 +193,9 @@ class CodexResponsesClient(
                     val delta = node.path("delta").asText(null)
                     if (!delta.isNullOrEmpty()) deltas += delta
                 }
+                "response.output_item.done" -> {
+                    functionCalls += extractFunctionCalls(objectMapper.createArrayNode().add(node.path("item")))
+                }
                 "response.completed" -> {
                     completed = true
                     val responseNode = node.path("response")
@@ -201,6 +205,10 @@ class CodexResponsesClient(
                     responseModel = responseNode.path("model").asText(null)
                     completedText = extractCompletedText(responseNode)
                     functionCalls += extractFunctionCalls(responseNode.path("output"))
+                }
+                "error" -> {
+                    val error = responseError(node) ?: objectMapper.treeToValue(node, ResponseError::class.java)
+                    throw responseFailure(error)
                 }
                 "response.failed" -> {
                     val error = responseError(node.path("response")) ?: responseError(node)
@@ -214,7 +222,7 @@ class CodexResponsesClient(
         }
 
         val outputText = completedText?.takeIf { it.isNotBlank() } ?: deltas.joinToString("")
-        return CodexResponse(outputText = outputText, functionCalls = functionCalls, raw = raw,
+        return CodexResponse(outputText = outputText, functionCalls = functionCalls.distinctBy { it.callId ?: it }, raw = raw,
             usage = usage, id = responseId, model = responseModel)
     }
 
@@ -236,6 +244,7 @@ class CodexResponsesClient(
         return ResponseError(
             message = errorNode.path("message").asText(null),
             code = errorNode.path("code").asText(null),
+            type = errorNode.path("type").asText(null),
         )
     }
 
@@ -244,7 +253,17 @@ class CodexResponsesClient(
             .filter { it.isNotBlank() }
             .joinToString(": ")
             .ifBlank { "unknown error" }
-        return CodexResponseException("Codex response failed: $detail")
+        val terminalCodes = setOf(
+            "access_denied", "invalid_api_key", "invalid_request_error", "invalid_request",
+            "authentication_error", "permission_denied", "permission_error", "model_not_found",
+            "unsupported_parameter", "unsupported_value", "context_length_exceeded",
+        )
+        val message = "Codex response failed: $detail"
+        return if (error.code in terminalCodes || error.type in terminalCodes) {
+            CodexTerminalResponseException(message, error.code ?: error.type)
+        } else {
+            CodexResponseException(message, code = error.code ?: error.type)
+        }
     }
 
     private fun extractCompletedText(responseNode: JsonNode): String {
