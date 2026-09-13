@@ -16,6 +16,7 @@
 package com.embabel.agent.codex.chat
 
 import com.embabel.common.ai.model.LlmOptions
+import com.embabel.common.ai.model.OptionsConverter
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -26,12 +27,14 @@ class CodexOptionsConverterTest {
     inner class ConvertOptions {
 
         @Test
-        fun `maps llm options onto codex chat options`() {
-            val converted = CodexOptionsConverter.convertOptions(
-                LlmOptions(model = "gpt-5.6-sol")
+        fun `maps llm options using the resolved model name`() {
+            val converter: OptionsConverter = CodexOptionsConverter
+            val converted = converter.convertOptions(
+                LlmOptions(model = "subscription-model-alias")
                     .withTemperature(0.2)
                     .withMaxTokens(1024)
-                    .withTopP(0.9)
+                    .withTopP(0.9),
+                model = "gpt-5.6-sol",
             )
             assertEquals("gpt-5.6-sol", converted.model)
             assertEquals(0.2, converted.temperature)

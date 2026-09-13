@@ -18,11 +18,11 @@ package com.embabel.agent.codex.chat
 import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.ai.model.OptionsConverter
 
-object CodexOptionsConverter : OptionsConverter<CodexChatOptions> {
+object CodexOptionsConverter : OptionsConverter {
 
-    override fun convertOptions(options: LlmOptions): CodexChatOptions =
+    override fun convertOptions(options: LlmOptions, model: String): CodexChatOptions =
         CodexChatOptions(
-            modelName = options.model,
+            modelName = model,
             temperature = options.temperature,
             maxTokens = options.maxTokens,
             topP = options.topP,
