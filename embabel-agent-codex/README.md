@@ -188,6 +188,21 @@ To compare model availability, repeat this command sequentially with a different
 errors, or skips. `BUILD SUCCESS` with a skipped test is not live verification.
 The smoke test checks a fixed text response; it does not benchmark model quality.
 
+## Live goal E2E
+
+Run a small annotated translation agent through the real core planner and
+`ToolLoopLlmOperations`, using the dedicated Embabel login above:
+
+```bash
+EMBABEL_LIVE_CODEX=1 mvn -pl embabel-agent-codex -Dtest=CodexGoalLiveIT test
+```
+
+This test fixes the model to `gpt-5.6-luna` with `low` effort. Its goal is to
+translate French `chat` into English `cat`. It asserts a completed process,
+the translated result, exactly one recorded LLM invocation and nonzero usage.
+It is opt-in; when enabled, missing credentials fail the test. It does not
+start an interactive shell or test tool execution.
+
 ## Prior art
 
 - [Hermes Agent Codex OAuth](https://github.com/NousResearch/hermes-agent/blob/d604141d097eec4a49493ad1eaceb9b2ca1e496d/hermes_cli/auth.py#L86-L108)
