@@ -16,12 +16,14 @@
 package com.embabel.agent.codex.chat
 
 import com.embabel.agent.codex.auth.CodexAccessTokenProvider
+import com.embabel.agent.codex.auth.CodexAuthException
 import com.embabel.agent.codex.auth.CodexCredentials
 import com.embabel.agent.codex.responses.CodexHttpTransport
 import com.embabel.agent.codex.responses.CodexResponseException
 import com.embabel.agent.codex.responses.CodexResponsesClient
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.springframework.ai.chat.messages.UserMessage
@@ -156,6 +158,22 @@ class CodexChatModelTest {
 
     @Nested
     inner class RetryContract {
+
+        @Test
+        fun `does not retry authentication failures with the default policy`() {
+            every { tokenProvider.accessToken() } throws CodexAuthException("invalid_refresh_token")
+            val transport = mockk<CodexHttpTransport>()
+            val client = CodexResponsesClient(tokenProvider, credentials, transport)
+            val model = CodexChatModel(client, model = "gpt-runtime")
+
+            val error = assertFailsWith<CodexAuthException> {
+                model.call(Prompt(listOf(UserMessage("hi"))))
+            }
+
+            assertEquals("invalid_refresh_token", error.message)
+            verify(exactly = 1) { tokenProvider.accessToken() }
+            verify(exactly = 0) { transport.post(any(), any(), any()) }
+        }
 
         /**
          * Spring Framework's core RetryTemplate wraps the final failure in a

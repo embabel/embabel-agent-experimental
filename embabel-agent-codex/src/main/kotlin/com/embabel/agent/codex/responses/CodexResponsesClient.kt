@@ -111,8 +111,8 @@ class CodexResponsesClient(
             "input" to input,
             "store" to false,
             "stream" to true,
+            "instructions" to (instructions?.takeIf { it.isNotBlank() } ?: "You are a helpful assistant."),
         )
-        if (!instructions.isNullOrBlank()) map["instructions"] = instructions
         if (tools.isNotEmpty()) map["tools"] = tools
         if (maxOutputTokens != null && maxOutputTokens > 0) map["max_output_tokens"] = maxOutputTokens
         if (temperature != null) map["temperature"] = temperature

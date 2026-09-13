@@ -17,6 +17,7 @@ package com.embabel.agent.codex.responses
 
 import com.embabel.agent.codex.auth.CodexAccessTokenProvider
 import com.embabel.agent.codex.auth.CodexCredentials
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -36,6 +37,27 @@ class CodexResponsesClientTest {
 
     @Nested
     inner class CreateResponse {
+
+        @Test
+        fun `always sends string instructions for prompts without a system message`() {
+            every { tokenProvider.accessToken() } returns "tok"
+            val bodies = mutableListOf<String>()
+            val transport = CodexHttpTransport { _, _, body ->
+                bodies += body
+                """{"output":[]}"""
+            }
+            val client = CodexResponsesClient(tokenProvider, credentials, transport)
+
+            client.create("gpt-runtime", emptyList())
+            client.create("gpt-runtime", emptyList(), instructions = "")
+            client.create("gpt-runtime", emptyList(), instructions = "   ")
+
+            for (body in bodies) {
+                val instructions = jacksonObjectMapper().readTree(body).path("instructions")
+                assertTrue(instructions.isTextual, "Codex requires string instructions")
+                assertEquals("You are a helpful assistant.", instructions.asText())
+            }
+        }
 
         @Test
         fun `parses output text from response`() {

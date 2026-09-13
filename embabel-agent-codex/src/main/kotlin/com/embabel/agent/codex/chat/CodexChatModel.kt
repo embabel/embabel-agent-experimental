@@ -15,6 +15,7 @@
  */
 package com.embabel.agent.codex.chat
 
+import com.embabel.agent.codex.auth.CodexAuthException
 import com.embabel.agent.codex.responses.CodexPromptConverter
 import com.embabel.agent.codex.responses.CodexResponse
 import com.embabel.agent.codex.responses.CodexResponsesClient
@@ -26,13 +27,16 @@ import org.springframework.ai.chat.model.Generation
 import org.springframework.ai.chat.prompt.ChatOptions
 import org.springframework.ai.chat.prompt.Prompt
 import org.springframework.core.retry.RetryException
+import org.springframework.core.retry.RetryPolicy
 import org.springframework.core.retry.RetryTemplate
 
 class CodexChatModel(
     private val responsesClient: CodexResponsesClient,
     private val model: String,
     private val defaultOptions: CodexChatOptions = CodexChatOptions(modelName = model),
-    private val retryTemplate: RetryTemplate = RetryTemplate(),
+    private val retryTemplate: RetryTemplate = RetryTemplate(
+        RetryPolicy.builder().excludes(CodexAuthException::class.java).build()
+    ),
 ) : ChatModel {
 
     override fun call(prompt: Prompt): ChatResponse {

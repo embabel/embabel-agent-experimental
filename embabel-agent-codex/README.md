@@ -44,6 +44,15 @@ store.save(credentials)
 
 Applications decide how to display the verification URL and code.
 
+If the token endpoint reports `invalid_refresh_token` or `refresh_token_reused`,
+repeat device login to replace the Embabel session. Changing the model cannot fix
+an authentication failure. The default chat retry policy does not retry
+`CodexAuthException`; applications can provide their own retry policy.
+
+Share one `CodexAccessTokenProvider` within an application. Its refresh lock is
+per instance, not cross-process: do not run multiple processes against the same
+credential file.
+
 ## ChatModel
 
 ```kotlin
@@ -87,6 +96,11 @@ credentials:
 EMBABEL_LIVE_CODEX=1 EMBABEL_CODEX_MODEL=your-model-id \
   mvn -pl embabel-agent-codex -Dtest=CodexLiveIT test
 ```
+
+To compare model availability, repeat this command sequentially with a different
+`EMBABEL_CODEX_MODEL`. A successful live call reports one test with no failures,
+errors, or skips. `BUILD SUCCESS` with a skipped test is not live verification.
+The smoke test checks a fixed text response; it does not benchmark model quality.
 
 ## Prior art
 
