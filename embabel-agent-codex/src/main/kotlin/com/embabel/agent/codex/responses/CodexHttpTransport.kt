@@ -17,6 +17,7 @@ package com.embabel.agent.codex.responses
 
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.body
+import java.nio.charset.StandardCharsets
 
 fun interface CodexHttpTransport {
     fun post(url: String, headers: Map<String, String>, body: String): String
@@ -33,7 +34,8 @@ class RestClientCodexHttpTransport(
         headers.forEach { (k, v) -> request = request.header(k, v) }
         return request.body(body)
             .retrieve()
-            .body<String>()
+            .body<ByteArray>()
+            ?.toString(StandardCharsets.UTF_8)
             ?: ""
     }
 }
