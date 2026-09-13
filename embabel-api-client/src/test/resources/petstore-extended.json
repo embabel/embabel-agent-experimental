@@ -49,7 +49,8 @@
             "description": "Maximum number of results",
             "required": false,
             "schema": {
-              "type": "integer"
+              "type": "integer",
+              "default": 50
             }
           },
           {

@@ -21,9 +21,11 @@ import com.embabel.agent.api.client.model.*
 import io.swagger.v3.oas.models.OpenAPI
 import io.swagger.v3.oas.models.Operation
 import io.swagger.v3.oas.models.PathItem
-import io.swagger.v3.oas.models.media.ArraySchema
 import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.parameters.Parameter
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.HexFormat
 
 /**
  * Converts a parsed Swagger [OpenAPI] object into an [ApiModel] IR,
@@ -77,6 +79,7 @@ internal object OpenApiModelBuilder {
 
                 operations.add(
                     ApiOperation(
+                        operationId = operation.operationId?.takeIf { it.isNotBlank() },
                         name = operationName(method, path, operation),
                         description = operationDescription(operation),
                         method = convertMethod(method),
@@ -90,7 +93,41 @@ internal object OpenApiModelBuilder {
             }
         }
 
-        return operations
+        return assignCallableNames(operations)
+    }
+
+    private fun assignCallableNames(operations: List<ApiOperation>): List<ApiOperation> {
+        val counts = operations.groupingBy { it.name }.eachCount()
+        val unchangedNames = operations.filter { counts.getValue(it.name) == 1 }.map { it.name }.toSet()
+        val colliding = operations.filter { counts.getValue(it.name) > 1 }
+        val readableCounts = colliding.groupingBy { readableCompositeName(it) }.eachCount()
+
+        return operations.map { operation ->
+            if (counts.getValue(operation.name) == 1) {
+                operation
+            } else {
+                val readableName = readableCompositeName(operation)
+                val name = if (readableCounts.getValue(readableName) == 1 && readableName !in unchangedNames) {
+                    readableName
+                } else {
+                    "${readableName}_${structuralSuffix(operation)}"
+                }
+                operation.copy(name = name)
+            }
+        }.also { named ->
+            val duplicates = named.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
+            check(duplicates.isEmpty()) {
+                "OpenAPI operations could not be assigned unique callable names: ${duplicates.sorted()}"
+            }
+        }
+    }
+
+    private fun readableCompositeName(operation: ApiOperation): String =
+        ToolNames.sanitize("${operation.name}_${operation.method.name.lowercase()}_${pathName(operation.path)}")
+
+    private fun structuralSuffix(operation: ApiOperation): String {
+        val identity = "${operation.method.name} ${operation.path}".toByteArray(StandardCharsets.UTF_8)
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(identity)).take(8)
     }
 
     private fun groupIntoResources(
@@ -132,7 +169,9 @@ internal object OpenApiModelBuilder {
                 return ApiSchema.Ref(typeName = name, description = schema.description)
             }
         }
-        return when (schema.type) {
+        val type = schema.type ?: schema.types?.firstOrNull { it != "null" }
+            ?: if (schema.items != null) "array" else null
+        return when (type) {
             "string" -> ApiSchema.Primitive(
                 type = PrimitiveType.STRING,
                 format = schema.format,
@@ -146,32 +185,30 @@ internal object OpenApiModelBuilder {
                 // marker on the enclosing property.
                 enumValues = schema.enum?.mapNotNull { it?.toString() },
                 description = schema.description,
+                defaultValue = schema.default,
             )
             "integer" -> ApiSchema.Primitive(
                 type = PrimitiveType.INTEGER,
                 format = schema.format,
                 description = schema.description,
+                defaultValue = schema.default,
             )
             "number" -> ApiSchema.Primitive(
                 type = PrimitiveType.NUMBER,
                 format = schema.format,
                 description = schema.description,
+                defaultValue = schema.default,
             )
             "boolean" -> ApiSchema.Primitive(
                 type = PrimitiveType.BOOLEAN,
                 description = schema.description,
+                defaultValue = schema.default,
             )
-            "array" -> {
-                val itemSchema = if (schema is ArraySchema && schema.items != null) {
-                    convertSchema(schema.items)
-                } else {
-                    ApiSchema.Primitive(type = PrimitiveType.STRING)
-                }
-                ApiSchema.Array(
-                    items = itemSchema,
-                    description = schema.description,
-                )
-            }
+            "array" -> ApiSchema.Array(
+                items = schema.items?.let { convertSchema(it) }
+                    ?: ApiSchema.Primitive(type = PrimitiveType.STRING),
+                description = schema.description,
+            )
             else -> convertObjectSchema(schema, nameHint)
         }
     }
@@ -233,10 +270,12 @@ internal object OpenApiModelBuilder {
     private fun extractResponses(operation: Operation): Map<String, ApiResponse> {
         val responses = operation.responses ?: return emptyMap()
         return responses.mapValues { (_, response) ->
-            val schema = response.content
-                ?.get("application/json")
-                ?.schema
-                ?.let { convertSchema(it) }
+            val content = response.content
+            fun mediaType(key: String) = key.substringBefore(';').trim().lowercase()
+            val media = content?.entries?.firstOrNull { mediaType(it.key) == "application/json" }?.value
+                ?: content?.entries?.firstOrNull { mediaType(it.key).endsWith("+json") }?.value
+                ?: content?.entries?.firstOrNull { mediaType(it.key) == "*/*" }?.value
+            val schema = media?.schema?.let { convertSchema(it) }
             ApiResponse(
                 description = response.description,
                 schema = schema,
@@ -244,13 +283,26 @@ internal object OpenApiModelBuilder {
         }
     }
 
-    // --- Naming (delegates to existing logic in OpenApiOperationTool) ---
+    // --- Naming ---
 
-    private fun operationName(
+    internal fun operationName(
         method: PathItem.HttpMethod,
         path: String,
         operation: Operation,
-    ): String = OpenApiOperationTool.operationName(method, path, operation)
+    ): String {
+        if (!operation.operationId.isNullOrBlank()) {
+            return ToolNames.sanitize(operation.operationId)
+        }
+        return ToolNames.sanitize("${method.name.lowercase()}_${pathName(path)}")
+    }
+
+    private fun pathName(path: String): String = path
+        .replace("{", "by_")
+        .replace("}", "")
+        .replace("/", "_")
+        .replace("-", "_")
+        .trim('_')
+        .replace("__", "_")
 
     private fun operationDescription(operation: Operation): String =
         OpenApiOperationTool.operationDescription(operation)
@@ -277,6 +329,6 @@ internal object OpenApiModelBuilder {
         PathItem.HttpMethod.PATCH -> HttpMethod.PATCH
         PathItem.HttpMethod.HEAD -> HttpMethod.HEAD
         PathItem.HttpMethod.OPTIONS -> HttpMethod.OPTIONS
-        PathItem.HttpMethod.TRACE -> HttpMethod.GET
+        PathItem.HttpMethod.TRACE -> HttpMethod.TRACE
     }
 }

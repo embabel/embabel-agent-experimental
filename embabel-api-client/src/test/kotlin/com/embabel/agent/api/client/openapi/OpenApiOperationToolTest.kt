@@ -17,6 +17,7 @@ package com.embabel.agent.api.client.openapi
 
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.swagger.v3.oas.models.OpenAPI
 import io.swagger.v3.oas.models.Operation
 import io.swagger.v3.oas.models.PathItem
@@ -64,6 +65,23 @@ class OpenApiOperationToolTest {
 
     @Nested
     inner class OperationNameTests {
+
+        @Test
+        fun `retains the original JVM constructor`() {
+            assertDoesNotThrow {
+                OpenApiOperationTool::class.java.getConstructor(
+                    String::class.java,
+                    String::class.java,
+                    PathItem.HttpMethod::class.java,
+                    Operation::class.java,
+                    RestClient::class.java,
+                    ObjectMapper::class.java,
+                    Map::class.java,
+                    String::class.java,
+                    List::class.java,
+                )
+            }
+        }
 
         @Test
         fun `uses operationId when available`() {
@@ -1432,6 +1450,150 @@ class OpenApiOperationToolTest {
         }
 
         @Test
+        fun `an HTTP error names the URL actually called, not the path template`() {
+            // The defect: the error said `.../pets/{petId}`, so a call whose path parameter was
+            // never substituted and one that simply asked for a missing pet produced the SAME
+            // message. Debugging a realm against a live API, that difference is the whole answer —
+            // and this string is also what the model is handed to correct itself from, so a
+            // template teaches it nothing about which value was wrong.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets/{petId}",
+                operation = Operation().apply {
+                    operationId = "getPetById"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "petId"
+                            `in` = "path"
+                            required = true
+                            schema = IntegerSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/pets/999"))
+                .andRespond(withResourceNotFound().body("Pet not found"))
+
+            val error = tool.call("""{"petId": 999}""") as Tool.Result.Error
+            assertTrue(
+                error.message.contains("https://api.example.com/pets/999"),
+                "should name the resolved URL, got: ${error.message}",
+            )
+            assertFalse(
+                error.message.contains("{petId}"),
+                "must not leave the path template in the message, got: ${error.message}",
+            )
+        }
+
+        @Test
+        fun `a path parameter containing a slash is encoded as one segment`() {
+            // deps.dev keys projects on a host-qualified path: github.com/apache/logging-log4j2.
+            // Substituting raw and encoding afterwards left the slashes as SEPARATORS, so the
+            // request became /v3/projects/github.com — truncated at the first slash, the rest
+            // silently lost, and a 400 that looked like a bad key rather than a mangled URL.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/v3/projects/{projectKey}",
+                operation = Operation().apply {
+                    operationId = "getProject"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "projectKey"
+                            `in` = "path"
+                            required = true
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/v3/projects/github.com%2Fapache%2Flogging-log4j2"))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"projectKey": "github.com/apache/logging-log4j2"}""")
+
+            assertInstanceOf(Tool.Result.Text::class.java, result)
+            server.verify()
+        }
+
+        @Test
+        fun `a path parameter is not double-encoded`() {
+            // The obvious workaround — pre-encoding the value — was the one thing that could not
+            // work, because the old pass then encoded the `%` and shipped `%252F`. A caller who
+            // still pre-encodes must not be silently mangled: a literal `%2F` in the value is a
+            // percent sign followed by 2F, and round-trips as `%252F` by definition. What must
+            // NOT happen is a RAW slash arriving as `%252F`.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/things/{id}",
+                operation = Operation().apply {
+                    operationId = "getThing"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "id"
+                            `in` = "path"
+                            required = true
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/things/a%2Fb"))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"id": "a/b"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `an ordinary path parameter is unchanged, and a space still encodes`() {
+            // The overwhelmingly common case must not move. A space encoded to %20 before and
+            // must still: the static template and the value are encoded separately now, not less.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets/{name}",
+                operation = Operation().apply {
+                    operationId = "getPetByName"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "name"
+                            `in` = "path"
+                            required = true
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/pets/mr%20bojangles"))
+                .andRespond(withSuccess("""{"ok":true}""", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"name": "mr bojangles"}""")
+            server.verify()
+        }
+
+        @Test
+        fun `an HTTP error keeps the query string, so a bad parameter value is visible`() {
+            // A wrong query value is the commonest cause of a 4xx from a well-formed request, and
+            // it is invisible unless the query string survives into the message.
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets/findByStatus",
+                operation = Operation().apply {
+                    operationId = "findPetsByStatus"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "status"
+                            `in` = "query"
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/pets/findByStatus?status=banana"))
+                .andRespond(withBadRequest().body("unknown status"))
+
+            val error = tool.call("""{"status": "banana"}""") as Tool.Result.Error
+            assertTrue(
+                error.message.contains("status=banana"),
+                "the offending value should be in the message, got: ${error.message}",
+            )
+        }
+
+        @Test
         fun `HTTP 500 returns error result`() {
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.GET, "/store/inventory",
@@ -1493,6 +1655,90 @@ class OpenApiOperationToolTest {
                 .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
 
             tool.call("")
+            server.verify()
+        }
+    }
+
+    @Nested
+    inner class HeaderParameterTests {
+
+        private fun headerOp(vararg headers: String) = Operation().apply {
+            operationId = "listPets"
+            parameters = headers.map { h -> Parameter().apply { name = h; `in` = "header" } }
+        }
+
+        @Test
+        fun `declared header parameters are sent as headers, not query params`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets",
+                operation = headerOp("PageSize", "PageNumber"),
+            )
+            server.expect(requestTo("https://api.example.com/pets"))
+                .andExpect(header("PageSize", "400"))
+                .andExpect(header("PageNumber", "1"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"PageSize":400,"PageNumber":1}""")
+            server.verify()
+        }
+
+        /**
+         * The regression that motivated header support: a header value carrying
+         * JSON contains `{`, `"` and `,`. Swept into the query string it makes
+         * URI construction throw `Illegal character in query`, so the request
+         * never leaves the process and the API is unusable through the tool
+         * surface even though the spec described it correctly.
+         */
+        @Test
+        fun `a JSON-valued header does not corrupt the URI`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/OnlineDA",
+                operation = headerOp("filters"),
+            )
+            val filters = """{"filters":{"CouncilName":["Waverley Council"]}}"""
+            server.expect(requestTo("https://api.example.com/OnlineDA"))
+                .andExpect(header("filters", filters))
+                .andRespond(withSuccess("""{"TotalCount":1}""", MediaType.APPLICATION_JSON))
+
+            // The header value is itself JSON, so it is escaped into the argument JSON.
+            val escaped = filters.replace("\"", "\\\"")
+            val result = tool.call("""{"filters":"$escaped"}""")
+            assertFalse(
+                result.toString().contains("Illegal character"),
+                "JSON-valued header must not reach the query string",
+            )
+            server.verify()
+        }
+
+        @Test
+        fun `undeclared arguments are not promoted to headers`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets",
+                operation = headerOp("PageSize"),
+            )
+            // `limit` is undeclared: it stays a query param (permissive
+            // forwarding), and must NOT become a header — otherwise
+            // model-supplied input could set Authorization or Host.
+            server.expect(requestTo("https://api.example.com/pets?limit=5"))
+                .andExpect(header("PageSize", "10"))
+                .andExpect(headerDoesNotExist("limit"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"PageSize":10,"limit":5}""")
+            server.verify()
+        }
+
+        @Test
+        fun `a list-valued header is joined rather than repeated`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/pets",
+                operation = headerOp("Accept-Kinds"),
+            )
+            server.expect(requestTo("https://api.example.com/pets"))
+                .andExpect(header("Accept-Kinds", "cat,dog"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"Accept-Kinds":["cat","dog"]}""")
             server.verify()
         }
     }
@@ -2043,6 +2289,67 @@ class OpenApiOperationToolTest {
             val result = tool.call("{}")
             val text = assertInstanceOf(Tool.Result.Text::class.java, result)
             assertTrue(text.content.contains("ok"))
+        }
+    }
+
+    /**
+     * A query value containing BRACES.
+     *
+     * `UriComponentsBuilder` reads `{...}` in any component as a URI-template placeholder, so a
+     * value like an ArcGIS polygon (`{"rings":[[...]]}`) became an unexpanded variable and the URI
+     * could not be constructed at all — "Illegal character in query at index 96". The request never
+     * left the process, which reads downstream as a source failure rather than a client defect.
+     */
+    @Nested
+    inner class BracesInQueryValues {
+
+        private fun geometryOp() = Operation().apply {
+            operationId = "queryGeometry"
+            parameters = listOf(
+                Parameter().name("geometry").`in`("query").schema(StringSchema()),
+                Parameter().name("f").`in`("query").schema(StringSchema()),
+            )
+        }
+
+        @Test
+        fun `a JSON polygon in a query value is sent, percent-encoded, not rejected`() {
+            val (tool, server) = createToolWithMock(PathItem.HttpMethod.GET, "/9/query", geometryOp())
+
+            server.expect(requestTo(containsString("geometry=%7B%22rings%22")))
+                .andRespond(withSuccess("""{"features":[]}""", MediaType.APPLICATION_JSON))
+
+            // The real shape an ArcGIS polygon query sends. Escaped by hand rather than built with
+            // a mapper so the braces and quotes under test are visible in the source.
+            val call = "{\"geometry\": \"{\\\"rings\\\":[[[150.31,-33.73],[150.32,-33.74]]]}\", \"f\": \"json\"}"
+            val result = tool.call(call)
+
+            assertInstanceOf(Tool.Result.Text::class.java, result)
+            server.verify()
+        }
+
+        /**
+         * The regression guard for the fix itself: encoding the value must not double-encode it.
+         * A `%20` that becomes `%2520` reaches the server as the literal text "%20".
+         */
+        @Test
+        fun `a space is encoded exactly once`() {
+            val (tool, server) = createToolWithMock(PathItem.HttpMethod.GET, "/9/query", geometryOp())
+            server.expect(requestTo(allOf(containsString("geometry=a%20b"), org.hamcrest.Matchers.not(containsString("%2520")))))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"geometry": "a b", "f": "json"}""")
+            server.verify()
+        }
+
+        /** An ampersand in a value must not split into a second parameter. */
+        @Test
+        fun `a reserved character cannot corrupt the query`() {
+            val (tool, server) = createToolWithMock(PathItem.HttpMethod.GET, "/9/query", geometryOp())
+            server.expect(requestTo(containsString("geometry=a%26f%3Dpwned")))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON))
+
+            tool.call("""{"geometry": "a&f=pwned", "f": "json"}""")
+            server.verify()
         }
     }
 

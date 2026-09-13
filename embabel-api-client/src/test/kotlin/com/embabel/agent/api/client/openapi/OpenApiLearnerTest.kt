@@ -16,6 +16,8 @@
 package com.embabel.agent.api.client.openapi
 
 import com.embabel.agent.api.client.*
+import com.embabel.agent.api.client.model.ApiSchema
+import com.embabel.agent.api.client.model.PrimitiveType
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.agent.api.tool.progressive.UnfoldingTool
@@ -48,6 +50,112 @@ class OpenApiLearnerTest {
         val requirements = learned().authRequirements
         assertEquals(1, requirements.size)
         assertInstanceOf(AuthRequirement.None::class.java, requirements[0])
+    }
+
+    @Test
+    fun `model reads an OpenAPI 3_1 array response from a wildcard media type`() {
+        val spec = """
+            {
+              "openapi": "3.1.0",
+              "info": { "title": "Wildcard response", "version": "1.0.0" },
+              "paths": {
+                "/reports": {
+                  "get": {
+                    "operationId": "listReports",
+                    "responses": {
+                      "200": {
+                        "description": "reports",
+                        "content": { "*/*": { "schema": { "${'$'}ref": "#/components/schemas/ReportPage" } } }
+                      }
+                    }
+                  }
+                }
+              },
+              "components": {
+                "schemas": {
+                  "ReportPage": {
+                    "type": "object",
+                    "properties": {
+                      "items": { "type": "array", "items": { "${'$'}ref": "#/components/schemas/Report" } },
+                      "page": { "type": "integer" }
+                    }
+                  },
+                  "Report": { "type": "object", "properties": { "total": { "type": "integer" } } }
+                }
+              }
+            }
+        """.trimIndent()
+        val openApi = OpenApiLearner.parseSpecPreservingRefs("inline", spec)
+        val model = OpenApiLearner.buildModel("inline", openApi)
+        val response = model.allOperations.single().responses.getValue("200")
+        val page = assertInstanceOf(ApiSchema.Object::class.java, model.types.getValue("ReportPage").schema)
+        val items = assertInstanceOf(ApiSchema.Array::class.java, page.properties.single { it.name == "items" }.schema)
+        val pageNumber = assertInstanceOf(
+            ApiSchema.Primitive::class.java,
+            page.properties.single { it.name == "page" }.schema,
+        )
+        val report = assertInstanceOf(ApiSchema.Object::class.java, model.types.getValue("Report").schema)
+        val total = assertInstanceOf(
+            ApiSchema.Primitive::class.java,
+            report.properties.single { it.name == "total" }.schema,
+        )
+
+        assertInstanceOf(ApiSchema.Ref::class.java, response.schema)
+        assertInstanceOf(ApiSchema.Ref::class.java, items.items)
+        assertEquals(PrimitiveType.INTEGER, pageNumber.type)
+        assertEquals(PrimitiveType.INTEGER, total.type)
+    }
+
+    @Test
+    fun `model reads a parameterised plus-json media type case insensitively`() {
+        val spec = """
+            {
+              "openapi": "3.1.0",
+              "info": { "title": "JSON response", "version": "1.0.0" },
+              "paths": {
+                "/report": {
+                  "get": {
+                    "operationId": "getReport",
+                    "responses": {
+                      "200": {
+                        "description": "report",
+                        "content": { "Application/Problem+JSON; charset=UTF-8": { "schema": { "type": "object" } } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val model = OpenApiLearner.buildModel("inline", OpenApiLearner.parseSpecPreservingRefs("inline", spec))
+
+        assertInstanceOf(ApiSchema.Object::class.java, model.allOperations.single().responses.getValue("200").schema)
+    }
+
+    @Test
+    fun `model does not treat an XML response as JSON`() {
+        val spec = """
+            {
+              "openapi": "3.1.0",
+              "info": { "title": "XML response", "version": "1.0.0" },
+              "paths": {
+                "/reports": {
+                  "get": {
+                    "operationId": "listReports",
+                    "responses": {
+                      "200": {
+                        "description": "reports",
+                        "content": { "application/xml": { "schema": { "type": "object" } } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val model = OpenApiLearner.buildModel("inline", OpenApiLearner.parseSpecPreservingRefs("inline", spec))
+
+        assertNull(model.allOperations.single().responses.getValue("200").schema)
     }
 
     // --- Auth requirements extraction ---

@@ -15,7 +15,9 @@
  */
 package com.embabel.agent.api.client.openapi
 
-import com.embabel.agent.api.client.ToolNames
+import com.embabel.agent.api.client.ApiCall
+import com.embabel.agent.api.client.ApiCallError
+import com.embabel.agent.api.client.ApiCallInterceptor
 import com.embabel.agent.api.tool.Tool
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -25,6 +27,7 @@ import io.swagger.v3.oas.models.media.ArraySchema
 import io.swagger.v3.oas.models.media.Schema
 import io.swagger.v3.oas.models.parameters.Parameter
 import org.slf4j.LoggerFactory
+import org.springframework.http.HttpMethod
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.util.LinkedMultiValueMap
@@ -32,6 +35,8 @@ import org.springframework.util.MultiValueMap
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientResponseException
 import org.springframework.web.util.UriComponentsBuilder
+import org.springframework.web.util.UriUtils
+import java.nio.charset.StandardCharsets
 import java.net.URI
 
 /**
@@ -63,10 +68,45 @@ class OpenApiOperationTool(
     // sitting in `Tool.Definition.metadata`. With this in place the
     // duplicated copies collapse to one.
     private val namedTypesJson: String? = null,
+    /**
+     * Cross-cutting hooks around this call. EMPTY BY DEFAULT, and deliberately so.
+     *
+     * [resolveQueryParams] is permissive: on GET and DELETE it forwards arguments the spec does not
+     * declare, because specs in the wild — especially synthesized ones — omit real parameters, and
+     * silently dropping them produces an unfiltered request the caller cannot diagnose. A pre-flight
+     * interceptor that REJECTS undeclared names is the exact opposite policy. Both are defensible,
+     * they cannot both be on, and which one is right depends on how trustworthy the spec is. So the
+     * choice belongs to whoever wires the client up, and the default preserves existing behaviour.
+     */
+    private val interceptors: List<ApiCallInterceptor> = emptyList(),
+    private val callableName: String = OpenApiModelBuilder.operationName(httpMethod, path, operation),
 ) : Tool {
 
+    constructor(
+        baseUrl: String,
+        path: String,
+        httpMethod: PathItem.HttpMethod,
+        operation: Operation,
+        restClient: RestClient,
+        objectMapper: ObjectMapper,
+        componentsSchemas: Map<String, Schema<*>>,
+        namedTypesJson: String?,
+        interceptors: List<ApiCallInterceptor>,
+    ) : this(
+        baseUrl,
+        path,
+        httpMethod,
+        operation,
+        restClient,
+        objectMapper,
+        componentsSchemas,
+        namedTypesJson,
+        interceptors,
+        OpenApiModelBuilder.operationName(httpMethod, path, operation),
+    )
+
     override val definition: Tool.Definition = Tool.Definition(
-        name = operationName(httpMethod, path, operation),
+        name = callableName,
         description = operationDescription(operation),
         inputSchema = buildInputSchema(operation, componentsSchemas),
     ).let { def ->
@@ -87,6 +127,7 @@ class OpenApiOperationTool(
     override fun call(input: String): Tool.Result {
         val started = System.currentTimeMillis()
         var uriForLog: String? = null
+        var interceptedCall: ApiCall? = null
         return try {
             @Suppress("UNCHECKED_CAST")
             val params: Map<String, Any?> = if (input.isBlank()) {
@@ -97,14 +138,33 @@ class OpenApiOperationTool(
 
             val resolvedPath = resolvePath(path, params)
             val queryParams = resolveQueryParams(params)
+            val headerParams = resolveHeaderParams(params)
             val body = resolveBody(params)
 
             val uri = buildUri(resolvedPath, queryParams)
             uriForLog = uri.toString()
 
-            logger.info("Calling {} {} (baseUrl={})", httpMethod, uri, baseUrl)
+            val call = ApiCall(
+                operationName = operation.operationId ?: path,
+                httpMethod = httpMethod.name,
+                url = uri.toString(),
+                suppliedArgumentNames = params.keys,
+                declaredParameterNames = declaredParameterNames(),
+            )
+            // Rejected here means the request is NOT sent: no latency, and no slice of the remote's
+            // rate limit spent on a mistake that was provable locally.
+            chain()?.beforeCall(call)?.let { rejected ->
+                logger.info("Rejected {} {} before dialling out: {}", httpMethod, uri, rejected.message)
+                return Tool.Result.error(rejected.message)
+            }
+            interceptedCall = call
 
-            val response = executeRequest(uri, body)
+            logger.info(
+                "Calling {} {} (baseUrl={}{})", httpMethod, uri, baseUrl,
+                if (headerParams.isEmpty()) "" else ", headers=${headerParams.keys}",
+            )
+
+            val response = executeRequest(uri, body, headerParams)
             val elapsed = System.currentTimeMillis() - started
             val status = response.statusCode.value()
             logger.info("Completed {} {} -> {} in {}ms", httpMethod, uri, status, "%,d".format(elapsed))
@@ -139,9 +199,19 @@ class OpenApiOperationTool(
             // and the LLM-visible tool error get it, so the model can correct.
             val errorBody = e.responseBodyAsString.take(2000)
             val elapsed = "%,d".format(System.currentTimeMillis() - started)
-            val message = "HTTP ${e.statusCode.value()} from $httpMethod $baseUrl$path after ${elapsed}ms: $errorBody"
+            // The URL ACTUALLY CALLED, not the template it came from. `$baseUrl$path` reads
+            // `/v3/projects/{projectKey}`, which makes a substitution failure and a genuinely bad
+            // parameter value look identical — the caller cannot tell whether the placeholder was
+            // filled in wrongly or never filled in at all, and neither can the model, which is
+            // handed this same string to correct itself from. `uriForLog` is set the moment the URI
+            // is built and is what the surrounding info logs already print, so this is consistency
+            // rather than new exposure. It falls back to the template only when the URI could not
+            // be built at all, where the template is genuinely all there is.
+            val called = uriForLog ?: "$baseUrl$path"
+            val message = "HTTP ${e.statusCode.value()} from $httpMethod $called after ${elapsed}ms: $errorBody"
             logger.warn(message)
-            Tool.Result.error(message, e)
+            val improved = improve(interceptedCall, ApiCallError(e.statusCode.value(), message))
+            Tool.Result.error(improved.message, e)
         } catch (e: Exception) {
             logger.warn(
                 "Error calling {} {} at {} after {}ms: {} ({})",
@@ -149,19 +219,71 @@ class OpenApiOperationTool(
                 "%,d".format(System.currentTimeMillis() - started),
                 e.javaClass.simpleName, e.message,
             )
-            Tool.Result.error("Error calling $httpMethod $path at $baseUrl: ${e.message}", e)
+            // A transport failure carries no status; an interceptor can still annotate it, and one
+            // that only handles 4xx will pass it straight through.
+            // Same reasoning as above: the log line just above already names the resolved URI, so the
+            // message the MODEL sees should not disagree with it.
+            val improved = improve(
+                interceptedCall,
+                ApiCallError(null, "Error calling $httpMethod ${uriForLog ?: path} at $baseUrl: ${e.message}"),
+            )
+            Tool.Result.error(improved.message, e)
         }
     }
 
-    private fun resolvePath(path: String, params: Map<String, Any?>): String {
-        var resolved = path
-        pathParameterNames().forEach { paramName ->
-            val value = params[paramName]
-            if (value != null) {
-                resolved = resolved.replace("{$paramName}", value.toString())
-            }
+    private fun chain(): ApiCallInterceptor? =
+        if (interceptors.isEmpty()) null else ApiCallInterceptor.chain(interceptors)
+
+    /**
+     * Run [onError] hooks, never letting one break the error it was asked to improve. Returns the
+     * original when there is no call context — a failure raised before the [ApiCall] was built has
+     * nothing for an interceptor to reason about.
+     */
+    private fun improve(call: ApiCall?, error: ApiCallError): ApiCallError {
+        val c = call ?: return error
+        val chain = chain() ?: return error
+        return runCatching { chain.onError(c, error) }.getOrElse {
+            logger.warn("Interceptor threw while handling an error; using the original: {}", it.message)
+            error
         }
-        return resolved
+    }
+
+    /** Every name the operation declares — path, query, header, and request-body properties. */
+    private fun declaredParameterNames(): Set<String> {
+        val declared = (operation.parameters ?: emptyList()).map { it.name }.toSet()
+        val bodyProps = operation.requestBody?.content?.values?.firstOrNull()?.schema
+            ?.deref(componentsSchemas)?.properties?.keys.orEmpty()
+        return declared + bodyProps
+    }
+
+    private fun resolvePath(path: String, params: Map<String, Any?>): String {
+        // Returns an ALREADY-ENCODED path, encoding the template and the values SEPARATELY —
+        // because only here is it still known which characters came from the caller.
+        //
+        // Substituting raw and encoding the assembled string afterwards cannot work: `/` is legal
+        // in a path, so an encoder run over the finished string leaves a slash IN A VALUE as a
+        // separator. `GET /v3/projects/{projectKey}` with `github.com/apache/logging-log4j2`
+        // became `/v3/projects/github.com` — truncated at the first slash, the rest silently lost.
+        // Pre-encoding the value to `%2F` did not help either, since the same pass then encoded the
+        // `%` to `%25`. There was no input that reached the server as `%2F`.
+        //
+        // So: static stretches get `encodePath` (which preserves the separators they legitimately
+        // contain), and each substituted value gets `encodePathSegment` (which does NOT, because a
+        // value is one segment and a slash inside it is data). An unfilled placeholder is encoded
+        // as the template text it still is, exactly as before.
+        val out = StringBuilder()
+        var cursor = 0
+        PATH_PLACEHOLDER.findAll(path).forEach { match ->
+            out.append(UriUtils.encodePath(path.substring(cursor, match.range.first), StandardCharsets.UTF_8))
+            val value = params[match.groupValues[1]]
+            out.append(
+                if (value != null) UriUtils.encodePathSegment(value.toString(), StandardCharsets.UTF_8)
+                else UriUtils.encodePath(match.value, StandardCharsets.UTF_8),
+            )
+            cursor = match.range.last + 1
+        }
+        out.append(UriUtils.encodePath(path.substring(cursor), StandardCharsets.UTF_8))
+        return out.toString()
     }
 
     /**
@@ -182,6 +304,7 @@ class OpenApiOperationTool(
      */
     private fun resolveQueryParams(params: Map<String, Any?>): Map<String, List<String>> {
         val pathParams = pathParameterNames().toSet()
+        val headerParams = headerParameterNames()
         val queryParamNames = (operation.parameters ?: emptyList())
             .filter { it.`in` == "query" }
             .map { it.name }
@@ -205,6 +328,7 @@ class OpenApiOperationTool(
         return params
             .filter { (k, _) ->
                 k != "body" && k !in pathParams && k !in bodyPropNames &&
+                    k !in headerParams &&
                     (k in queryParamNames || isReadOnly)
             }
             .filter { it.value != null }
@@ -216,9 +340,48 @@ class OpenApiOperationTool(
             }
     }
 
-    private fun pathParameterNames(): List<String> {
-        val regex = "\\{([^}]+)}".toRegex()
-        return regex.findAll(path).map { it.groupValues[1] }.toList()
+    private fun pathParameterNames(): List<String> =
+        PATH_PLACEHOLDER.findAll(path).map { it.groupValues[1] }.toList()
+
+    /**
+     * Names of parameters the spec declares as `in: header`.
+     *
+     * These must be excluded from the query string. The permissive
+     * forwarding rule above (`isReadOnly`) otherwise sweeps every unmatched
+     * argument into the query for GET/DELETE, which for a header parameter
+     * is always wrong and can be fatal: a header value carrying JSON (a
+     * filter object, say) contains `{`, `"` and `,`, and building a URI from
+     * it throws `Illegal character in query`, so the call never leaves the
+     * process. The API is then unusable through the tool surface even though
+     * the spec described it correctly.
+     */
+    private fun headerParameterNames(): Set<String> =
+        (operation.parameters ?: emptyList())
+            .filter { it.`in` == "header" }
+            .map { it.name }
+            .toSet()
+
+    /**
+     * Header values for this call, taken from the caller's argument map by
+     * the names the spec declares as `in: header`.
+     *
+     * Unlike query params this is NOT permissive: only declared header
+     * parameters are forwarded. An undeclared argument is far more likely to
+     * be a query param the spec forgot than a header the caller meant to set,
+     * and silently promoting arbitrary arguments to headers risks setting
+     * `Authorization` or `Host` from model-supplied input.
+     */
+    private fun resolveHeaderParams(params: Map<String, Any?>): Map<String, String> {
+        val declared = headerParameterNames()
+        if (declared.isEmpty()) return emptyMap()
+        return params
+            .filter { (k, v) -> k in declared && v != null }
+            .mapValues { (_, v) ->
+                when (v) {
+                    is Collection<*> -> v.mapNotNull { it?.toString() }.joinToString(",")
+                    else -> v.toString()
+                }
+            }
     }
 
     /**
@@ -278,38 +441,58 @@ class OpenApiOperationTool(
 
     private fun buildUri(resolvedPath: String, queryParams: Map<String, List<String>>): URI {
         val builder = UriComponentsBuilder
-            .fromUriString(baseUrl.trimEnd('/') + resolvedPath)
+            // `resolvedPath` arrives ALREADY ENCODED from resolvePath, which is the only place that
+            // still knows which characters were caller-supplied values rather than separators.
+            // Re-encoding it here would turn its `%2F` into `%252F`. The base URL carries no
+            // placeholders, so it is encoded on its own for the reason the path once was:
+            // `build(true)` below will not encode it, and a base can carry a space or non-ASCII.
+            .fromUriString(UriUtils.encodePath(baseUrl.trimEnd('/'), StandardCharsets.UTF_8) + resolvedPath)
 
+        // Values are percent-encoded HERE, one at a time, rather than by a trailing
+        // `builder.encode()`. Both make a space safe; only this survives a BRACE.
+        // UriComponentsBuilder reads `{...}` in any component as a URI-template
+        // placeholder, so a value like `{"rings":[[…]]}` becomes an unexpanded
+        // variable and `toUri()` throws "Illegal character in query" — which is
+        // what a GeoJSON-ish polygon sent to an ArcGIS `/query` endpoint does.
+        // Encoding first turns the braces into %7B/%7D, and `build(true)` is then
+        // told the parts are already encoded so nothing re-encodes the `%`.
         queryParams.forEach { (key, values) ->
             values.forEach { value ->
-                builder.queryParam(key, value)
+                builder.queryParam(key, UriUtils.encodeQueryParam(value, StandardCharsets.UTF_8))
             }
         }
 
-        // `build()` alone does NOT percent-encode — a query value like
-        // "Pain and Glory" would go out as a raw space (`?t=Pain and Glory`),
-        // and `&`/`?`/`#`/non-ASCII in a value would corrupt the query. Encode
-        // explicitly so query (and path) values are URL-safe.
-        //
         // Return a java.net.URI, NOT a String: RestClient.uri(String) treats a
         // string as a URI *template* and encodes it AGAIN, turning our %20 into
         // %2520 — the server then decodes to a literal "%20" inside the value
         // (a multi-term GitHub `q` searched as one nonsense token: 422 or a
         // silent zero, embabel/me#459). RestClient.uri(URI) is used verbatim.
-        return builder.encode().build().toUri()
+        return builder.build(true).toUri()
     }
 
-    private fun executeRequest(uri: URI, body: Any?): ResponseEntity<String> {
+    private fun executeRequest(
+        uri: URI,
+        body: Any?,
+        headers: Map<String, String> = emptyMap(),
+    ): ResponseEntity<String> {
+        fun <S : RestClient.RequestHeadersSpec<S>> S.withDeclaredHeaders(): S =
+            also { spec -> headers.forEach { (name, value) -> spec.header(name, value) } }
+
         return when (httpMethod) {
             PathItem.HttpMethod.GET -> restClient.get().uri(uri)
+                .withDeclaredHeaders()
                 .retrieve().toEntity(String::class.java)
 
             PathItem.HttpMethod.DELETE -> restClient.delete().uri(uri)
+                .withDeclaredHeaders()
                 .retrieve().toEntity(String::class.java)
 
-            PathItem.HttpMethod.POST -> executeWithBody(restClient.post().uri(uri), body)
-            PathItem.HttpMethod.PUT -> executeWithBody(restClient.put().uri(uri), body)
-            PathItem.HttpMethod.PATCH -> executeWithBody(restClient.patch().uri(uri), body)
+            PathItem.HttpMethod.POST -> executeWithBody(restClient.post().uri(uri).withDeclaredHeaders(), body)
+            PathItem.HttpMethod.PUT -> executeWithBody(restClient.put().uri(uri).withDeclaredHeaders(), body)
+            PathItem.HttpMethod.PATCH -> executeWithBody(restClient.patch().uri(uri).withDeclaredHeaders(), body)
+            PathItem.HttpMethod.TRACE -> restClient.method(HttpMethod.TRACE).uri(uri)
+                .withDeclaredHeaders()
+                .retrieve().toEntity(String::class.java)
 
             else -> throw UnsupportedOperationException("HTTP method $httpMethod not supported")
         }
@@ -370,6 +553,9 @@ class OpenApiOperationTool(
     }
 
     companion object {
+
+        /** `{name}` in a path template. Compiled once; used to find the names AND to substitute. */
+        private val PATH_PLACEHOLDER = Regex("\\{([^}]+)}")
 
         /**
          * Metadata key for the JSON Schema string describing the tool's
@@ -592,22 +778,7 @@ class OpenApiOperationTool(
             httpMethod: PathItem.HttpMethod,
             path: String,
             operation: Operation,
-        ): String {
-            // Prefer operationId if available
-            if (!operation.operationId.isNullOrBlank()) {
-                return ToolNames.sanitize(operation.operationId)
-            }
-            // Synthesize from method + path: GET /pets/{petId} → get_pets_by_petId
-            val synthesized = path
-                .replace("{", "by_")
-                .replace("}", "")
-                .replace("/", "_")
-                .replace("-", "_")
-                .trimStart('_')
-                .trimEnd('_')
-                .replace("__", "_")
-            return ToolNames.sanitize("${httpMethod.name.lowercase()}_$synthesized")
-        }
+        ): String = OpenApiModelBuilder.operationName(httpMethod, path, operation)
 
         internal fun operationDescription(operation: Operation): String {
             return listOfNotNull(
