@@ -16,12 +16,12 @@
 package com.embabel.agent.api.client.explorer
 
 import com.embabel.agent.api.tool.Tool
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.http.client.JdkClientHttpRequestFactory
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientResponseException
+import tools.jackson.module.kotlin.jacksonObjectMapper
 
 /**
  * A [Tool] that allows an AI agent to make HTTP requests for API exploration.

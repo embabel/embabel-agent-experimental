@@ -16,8 +16,8 @@
 package com.embabel.agent.executor
 
 import com.embabel.agent.api.tool.Tool
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
+import tools.jackson.module.kotlin.jacksonObjectMapper
+import tools.jackson.module.kotlin.readValue
 
 /**
  * A [Tool] that delegates to an [AgentExecutor] for typed execution.

@@ -18,12 +18,12 @@ package com.embabel.agent.api.client.graphql
 import com.embabel.agent.api.client.ToolNames
 import com.embabel.agent.api.client.openapi.OpenApiOperationTool
 import com.embabel.agent.api.tool.Tool
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientResponseException
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 
 /**
  * A [Tool] that wraps a single GraphQL query or mutation.

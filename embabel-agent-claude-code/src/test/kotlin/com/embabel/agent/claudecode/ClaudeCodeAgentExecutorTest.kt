@@ -15,14 +15,12 @@
  */
 package com.embabel.agent.claudecode
 
-import com.embabel.agent.sandbox.SandboxConfig
 import com.embabel.agent.spec.model.StepSpec
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
-import com.fasterxml.jackson.module.kotlin.readValue
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import org.junit.jupiter.api.Test
+import tools.jackson.databind.DeserializationFeature
+import tools.jackson.dataformat.yaml.YAMLMapper
+import tools.jackson.module.kotlin.kotlinModule
+import tools.jackson.module.kotlin.readValue
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -77,11 +75,12 @@ class ClaudeCodeAgentExecutorTest {
 
     // -- Sandbox config deserialization --
 
-    private fun yamlMapper() = ObjectMapper(YAMLFactory()).apply {
-        registerKotlinModule()
-        disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-        registerSubtypes(ClaudeCodeAgentExecutor::class.java)
-    }
+    private fun yamlMapper() = YAMLMapper.builder()
+        .addModule(kotlinModule())
+        .findAndAddModules()
+        .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+        .registerSubtypes(ClaudeCodeAgentExecutor::class.java)
+        .build()
 
     @Test
     fun `sandbox config deserializes from YAML with enabled true`() {
