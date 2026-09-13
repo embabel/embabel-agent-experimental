@@ -52,25 +52,24 @@ data class ApiModel(
     }
 
     /**
-     * Return a new [ApiModel] containing only the operations whose
-     * sanitized name matches one of [operationIds]. Resources with no
-     * surviving operations are dropped. More precise than [filterByTags]:
-     * use this when a tag-group is much larger than the subset you
-     * actually want surfaced (GitHub's `repos` group has ~80 operations;
-     * most users want only `repos/get`).
-     *
-     * Match is against the sanitized operationId — the same string that
-     * becomes the tool name (e.g. `repos/get` → `repos_get`). Both
-     * dashed and snake_cased names accepted; canonicalised internally.
+     * Return a new [ApiModel] containing only the operations whose original
+     * operation ID matches one of [operationIds]. Exact original IDs win;
+     * separator-insensitive matching remains as a fallback for compatibility.
+     * Operations without an ID fall back to their synthesized callable name.
+     * Resources with no surviving operations are dropped.
      */
     fun filterByOperationIds(operationIds: Set<String>): ApiModel {
-        val canonical = operationIds.map { it.canonicalOpId() }.toSet()
+        val exact = operationIds intersect allOperations.mapNotNullTo(mutableSetOf()) { it.operationId }
+        val canonicalFallbacks = (operationIds - exact).map { it.canonicalOpId() }.toSet()
         return copy(
             resources = resources
                 .map { resource ->
                     resource.copy(
                         operations = resource.operations.filter {
-                            it.name.canonicalOpId() in canonical
+                            it.operationId in exact ||
+                                listOfNotNull(it.operationId, it.name).any { candidate ->
+                                    candidate.canonicalOpId() in canonicalFallbacks
+                                }
                         },
                     )
                 }
@@ -78,9 +77,9 @@ data class ApiModel(
         )
     }
 
-    /** All operations across all resources. */
+    /** All structurally distinct operations across all resources. */
     val allOperations: List<ApiOperation>
-        get() = resources.flatMap { it.operations }
+        get() = resources.flatMap { it.operations }.distinctBy { it.method to it.path }
 }
 
 /**
@@ -113,6 +112,7 @@ data class ApiOperation(
     val requestBody: ApiSchema? = null,
     val responses: Map<String, ApiResponse> = emptyMap(),
     val tags: List<String> = emptyList(),
+    val operationId: String? = null,
 )
 
 data class ApiResponse(
@@ -133,7 +133,7 @@ enum class ParameterLocation {
 }
 
 enum class HttpMethod {
-    GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS,
+    GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS, TRACE,
 }
 
 /**
