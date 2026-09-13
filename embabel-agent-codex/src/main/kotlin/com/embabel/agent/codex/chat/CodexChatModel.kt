@@ -54,6 +54,7 @@ class CodexChatModel(
                     maxOutputTokens = options.maxTokens,
                     temperature = options.temperature,
                     topP = options.topP,
+                    reasoningEffort = options.reasoningEffort,
                 )
             }
         } catch (retryExhausted: RetryException) {
@@ -89,34 +90,7 @@ class CodexChatModel(
             temperature = options.temperature ?: defaultOptions.temperature,
             maxTokens = options.maxTokens ?: defaultOptions.maxTokens,
             topP = options.topP ?: defaultOptions.topP,
+            reasoningEffort = (options as? CodexChatOptions)?.reasoningEffort ?: defaultOptions.reasoningEffort,
         )
     }
-}
-
-data class CodexChatOptions(
-    private val modelName: String? = null,
-    private val temperature: Double? = null,
-    private val maxTokens: Int? = null,
-    private val topP: Double? = null,
-) : ChatOptions {
-    override fun getModel(): String? = modelName
-    override fun getFrequencyPenalty(): Double? = null
-    override fun getMaxTokens(): Int? = maxTokens
-    override fun getPresencePenalty(): Double? = null
-    override fun getStopSequences(): List<String>? = null
-    override fun getTemperature(): Double? = temperature
-    override fun getTopK(): Int? = null
-    override fun getTopP(): Double? = topP
-
-    /**
-     * Spring AI 2.0 replaced `ChatOptions.copy()` with `mutate()`. These options carry
-     * no Codex-specific fields beyond the portable ones, so a pre-populated portable
-     * builder reproduces this instance faithfully.
-     */
-    override fun mutate(): ChatOptions.Builder<*> =
-        ChatOptions.builder()
-            .model(modelName)
-            .temperature(temperature)
-            .maxTokens(maxTokens)
-            .topP(topP)
 }

@@ -17,6 +17,8 @@ package com.embabel.agent.codex.chat
 
 import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.ai.model.OptionsConverter
+import com.embabel.common.ai.model.spi.InternalExtensionApi
+import com.embabel.agent.codex.responses.CodexReasoningEffort
 
 object CodexOptionsConverter : OptionsConverter {
 
@@ -26,5 +28,16 @@ object CodexOptionsConverter : OptionsConverter {
             temperature = options.temperature,
             maxTokens = options.maxTokens,
             topP = options.topP,
+            reasoningEffort = options.getCodexReasoningEffort(),
         )
 }
+
+private const val CODEX_REASONING_EFFORT = "codex.reasoningEffort"
+
+@OptIn(InternalExtensionApi::class)
+fun LlmOptions.withCodexReasoningEffort(effort: CodexReasoningEffort): LlmOptions =
+    withExtension(CODEX_REASONING_EFFORT, effort)
+
+@OptIn(InternalExtensionApi::class)
+fun LlmOptions.getCodexReasoningEffort(): CodexReasoningEffort? =
+    getExtension(CODEX_REASONING_EFFORT)

@@ -68,12 +68,13 @@ class CodexResponsesClient(
         maxOutputTokens: Int? = null,
         temperature: Double? = null,
         topP: Double? = null,
+        reasoningEffort: CodexReasoningEffort? = null,
     ): CodexResponse {
         return try {
-            doCreate(model, input, tools, instructions, maxOutputTokens, temperature, topP)
+            doCreate(model, input, tools, instructions, maxOutputTokens, temperature, topP, reasoningEffort)
         } catch (e: HttpClientErrorException.Unauthorized) {
             tokenProvider.invalidateAndRefresh()
-            doCreate(model, input, tools, instructions, maxOutputTokens, temperature, topP)
+            doCreate(model, input, tools, instructions, maxOutputTokens, temperature, topP, reasoningEffort)
         }
     }
 
@@ -85,8 +86,9 @@ class CodexResponsesClient(
         maxOutputTokens: Int?,
         temperature: Double?,
         topP: Double?,
+        reasoningEffort: CodexReasoningEffort?,
     ): CodexResponse {
-        val requestBody = buildRequestBody(model, input, tools, instructions, maxOutputTokens, temperature, topP)
+        val requestBody = buildRequestBody(model, input, tools, instructions, maxOutputTokens, temperature, topP, reasoningEffort)
         val accessToken = tokenProvider.accessToken()
         val headers = CodexCloudflareHeaders.build(credentials) + mapOf(
             "Authorization" to "Bearer $accessToken",
@@ -105,6 +107,7 @@ class CodexResponsesClient(
         maxOutputTokens: Int?,
         temperature: Double?,
         topP: Double?,
+        reasoningEffort: CodexReasoningEffort?,
     ): String {
         val map = mutableMapOf<String, Any>(
             "model" to model,
@@ -117,6 +120,7 @@ class CodexResponsesClient(
         if (maxOutputTokens != null && maxOutputTokens > 0) map["max_output_tokens"] = maxOutputTokens
         if (temperature != null) map["temperature"] = temperature
         if (topP != null) map["top_p"] = topP
+        if (reasoningEffort != null) map["reasoning"] = mapOf("effort" to reasoningEffort.wireValue)
         return objectMapper.writeValueAsString(map)
     }
 

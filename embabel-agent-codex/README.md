@@ -70,6 +70,53 @@ val response = chatModel.call(Prompt("Hello from Embabel"))
 Set `EMBABEL_CODEX_MODEL` to a model available to the authenticated subscription.
 The module does not publish a fixed model catalog.
 
+## Thinking levels
+
+Set Codex reasoning effort on default options or per prompt:
+
+```kotlin
+val options = CodexChatOptions(reasoningEffort = CodexReasoningEffort.HIGH)
+val response = chatModel.call(Prompt("Explain this algorithm", options))
+val lowerEffort = options.mutate().reasoningEffort(CodexReasoningEffort.LOW).build()
+```
+
+For Embabel's provider options conversion:
+
+```kotlin
+val llmOptions = LlmOptions(model = "your-model-id")
+    .withCodexReasoningEffort(CodexReasoningEffort.HIGH)
+```
+
+The wire values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. These are sent as `reasoning.effort`. An unset effort omits
+`reasoning` and uses the server default. Runtime effort overrides the model's
+configured default; `NONE` explicitly requests `none`, whereas null inherits
+that default. Model support is determined by the subscription endpoint; the
+module does not silently downgrade unsupported efforts. A generic thinking token
+budget is not converted to effort because the two controls are not equivalent.
+
+`mutate()`, builder cloning, and `combineWith()` preserve Codex effort. The builder
+extends Spring AI's `DefaultChatOptionsBuilder` for portable option handling.
+
+To run a live matrix in one Maven invocation (sequential requests):
+
+```bash
+EMBABEL_LIVE_CODEX=1 \
+EMBABEL_CODEX_MODEL=gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-6-astra \
+EMBABEL_CODEX_REASONING_EFFORT=low,medium,high,xhigh,max \
+  mvn -pl embabel-agent-codex -Dtest=CodexLiveIT test
+```
+
+Verified on 2026-09-13 with this subscription: Sol, Terra and Luna accepted
+`none`, `low`, `medium`, `high`, `xhigh`, `max`; Astra accepted `low`, `medium`,
+`high`, `xhigh`, `max`. All four rejected `minimal`. The endpoint rejected
+`ultra` as an invalid wire value, so it is deliberately not in this enum even
+when a Codex UI exposes an Ultra mode.
+
+Each model/effort pair is a separate test. Include `none,minimal` to probe those
+levels as well; a model may reject them. Passing establishes request acceptance
+and text completion, not comparative reasoning quality or identical behavior
+across providers.
+
 ## Limitations
 
 - The default backend is `https://chatgpt.com/backend-api/codex`. It is an
