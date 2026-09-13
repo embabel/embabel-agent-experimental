@@ -61,6 +61,7 @@ The following modules are currently in the experimental repository:
 | Module | Description | Status |
 |--------|-------------|--------|
 | **embabel-agent-claude-code** | Claude Code CLI integration | Active Development |
+| **embabel-agent-codex** | Codex ChatGPT subscription OAuth and Responses `ChatModel` | Active Development |
 | **embabel-agent-discord** | Discord integration for agent interactions | Active Development |
 | **embabel-agent-eval** | Agent evaluation and benchmarking capabilities | Active Development |
 | **embabel-agent-remote** | Remote agent execution and distributed processing | Active Development |
