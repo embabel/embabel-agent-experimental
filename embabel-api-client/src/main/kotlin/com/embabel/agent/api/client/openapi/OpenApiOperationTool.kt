@@ -456,9 +456,14 @@ class OpenApiOperationTool(
         // what a GeoJSON-ish polygon sent to an ArcGIS `/query` endpoint does.
         // Encoding first turns the braces into %7B/%7D, and `build(true)` is then
         // told the parts are already encoded so nothing re-encodes the `%`.
+        // The NAME is encoded for the same reason, and it matters as often: `status[]`, the
+        // Rails/PHP spelling of "this parameter is a list", has brackets `build(true)` refuses
+        // ("Invalid character '[' for QUERY_PARAM"), so an operation that declared one could not
+        // be called at all. A server decodes `status%5B%5D` to `status[]` before it looks at it.
         queryParams.forEach { (key, values) ->
+            val name = UriUtils.encodeQueryParam(key, StandardCharsets.UTF_8)
             values.forEach { value ->
-                builder.queryParam(key, UriUtils.encodeQueryParam(value, StandardCharsets.UTF_8))
+                builder.queryParam(name, UriUtils.encodeQueryParam(value, StandardCharsets.UTF_8))
             }
         }
 
