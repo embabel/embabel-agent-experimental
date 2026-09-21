@@ -19,12 +19,12 @@ import com.embabel.agent.api.client.*
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.embabel.agent.api.tool.progressive.UnfoldingTool
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.http.client.JdkClientHttpRequestFactory
 import org.springframework.web.client.RestClient
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 
 /**
  * [ApiLearner] that learns GraphQL APIs via introspection.

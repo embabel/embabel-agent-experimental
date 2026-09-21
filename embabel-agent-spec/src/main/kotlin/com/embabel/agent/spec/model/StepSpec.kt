@@ -16,11 +16,11 @@
 package com.embabel.agent.spec.model
 
 import com.embabel.agent.core.AgentSystemStep
+import com.embabel.agent.spec.support.NameOrClassTypeIdResolver
 import com.embabel.common.core.types.NamedAndDescribed
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
-import com.embabel.agent.spec.support.NameOrClassTypeIdResolver
-import com.fasterxml.jackson.databind.annotation.JsonTypeIdResolver
+import tools.jackson.databind.annotation.JsonTypeIdResolver
 
 /**
  * Definition of a step in an agent system: Action or Goal.

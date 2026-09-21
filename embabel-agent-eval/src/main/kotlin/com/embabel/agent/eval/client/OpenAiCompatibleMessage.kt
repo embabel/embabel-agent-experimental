@@ -15,7 +15,7 @@
  */
 package com.embabel.agent.eval.client
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize
+import tools.jackson.databind.annotation.JsonDeserialize
 
 enum class MessageRole {
     user, assistant, system, tool

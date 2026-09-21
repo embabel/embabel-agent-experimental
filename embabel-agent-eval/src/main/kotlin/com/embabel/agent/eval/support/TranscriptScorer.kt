@@ -19,8 +19,7 @@ import com.embabel.agent.api.common.Ai
 import com.embabel.agent.eval.client.SessionCreationRequest
 import com.embabel.common.ai.model.LlmOptions
 import com.embabel.common.textio.template.TemplateRenderer
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 
 internal val SCORES_EXAMPLE = SubjectiveScores(
     tone = 0.5,
@@ -49,7 +48,7 @@ class TranscriptScorer(
             mapOf(
                 "config" to evaluationRun.job,
                 "transcript" to evaluationRun.transcript,
-                "example" to jacksonObjectMapper().registerModule(JavaTimeModule()).writerWithDefaultPrettyPrinter()
+                "example" to jacksonObjectMapper().writerWithDefaultPrettyPrinter()
                     .writeValueAsString(SCORES_EXAMPLE),
             )
         )

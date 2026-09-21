@@ -24,7 +24,7 @@ import com.embabel.agent.core.support.AbstractAction
 import com.embabel.agent.domain.io.UserInput
 import com.embabel.agent.spec.model.PromptedActionSpec
 import com.embabel.common.ai.prompt.PromptContributor
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 
 /**
  * Action implementation that executes the relevant metadata

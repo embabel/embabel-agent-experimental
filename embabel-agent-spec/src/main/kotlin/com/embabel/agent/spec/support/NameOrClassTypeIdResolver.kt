@@ -18,12 +18,12 @@ package com.embabel.agent.spec.support
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
 import com.fasterxml.jackson.annotation.JsonTypeName
-import com.fasterxml.jackson.databind.DatabindContext
-import com.fasterxml.jackson.databind.JavaType
-import com.fasterxml.jackson.databind.jsontype.impl.TypeIdResolverBase
+import tools.jackson.databind.DatabindContext
+import tools.jackson.databind.JavaType
+import tools.jackson.databind.jsontype.impl.TypeIdResolverBase
 
 /**
- * A Jackson [com.fasterxml.jackson.databind.jsontype.TypeIdResolver] that supports both:
+ * A Jackson [tools.jackson.databind.jsontype.TypeIdResolver] that supports both:
  * - Short names registered via `@JsonSubTypes` or `@JsonTypeName` (e.g., "action", "goal")
  * - Fully qualified class names (e.g., "com.example.MyImplementation")
  *
@@ -59,9 +59,9 @@ class NameOrClassTypeIdResolver : TypeIdResolverBase() {
         }
     }
 
-    override fun idFromValue(value: Any): String = idFromClass(value.javaClass)
+    override fun idFromValue(ctxt: DatabindContext, value: Any): String = idFromClass(value.javaClass)
 
-    override fun idFromValueAndType(value: Any?, suggestedType: Class<*>): String = idFromClass(suggestedType)
+    override fun idFromValueAndType(ctxt: DatabindContext, value: Any?, suggestedType: Class<*>): String = idFromClass(suggestedType)
 
     private fun idFromClass(clazz: Class<*>): String {
         typeToName[clazz]?.let { return it }

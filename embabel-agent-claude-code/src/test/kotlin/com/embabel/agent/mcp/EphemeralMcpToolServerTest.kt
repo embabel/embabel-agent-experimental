@@ -16,8 +16,8 @@
 package com.embabel.agent.mcp
 
 import com.embabel.agent.api.tool.Tool
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Test
+import tools.jackson.module.kotlin.jacksonObjectMapper
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -72,8 +72,8 @@ class EphemeralMcpToolServerTest {
             assertNotNull(config.get("mcpServers"), "Should have mcpServers key")
             val serverConfig = config.get("mcpServers").get("my-tools")
             assertNotNull(serverConfig, "Should have server entry with correct name")
-            assertEquals("sse", serverConfig.get("type").asText())
-            assertEquals(server.url, serverConfig.get("url").asText())
+            assertEquals("sse", serverConfig.get("type").asString())
+            assertEquals(server.url, serverConfig.get("url").asString())
         } finally {
             server.close()
         }

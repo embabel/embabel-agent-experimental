@@ -17,14 +17,13 @@ package com.embabel.agent.spec.yml
 
 import com.embabel.agent.spec.model.StepSpec
 import com.embabel.agent.spec.persistence.StepSpecRepository
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.databind.SerializationFeature
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
-import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator
-import com.fasterxml.jackson.module.kotlin.readValue
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import org.slf4j.LoggerFactory
+import tools.jackson.databind.DeserializationFeature
+import tools.jackson.databind.SerializationFeature
+import tools.jackson.dataformat.yaml.YAMLMapper
+import tools.jackson.dataformat.yaml.YAMLWriteFeature
+import tools.jackson.module.kotlin.kotlinModule
+import tools.jackson.module.kotlin.readValue
 import java.io.File
 
 /**
@@ -39,16 +38,18 @@ class YmlStepSpecRepository(
 
     private val logger = LoggerFactory.getLogger(javaClass)
 
-    private val yamlMapper = ObjectMapper(
-        YAMLFactory().disable(YAMLGenerator.Feature.USE_NATIVE_TYPE_ID)
-    ).apply {
-        registerKotlinModule()
-        enable(SerializationFeature.INDENT_OUTPUT)
-        disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-        if (additionalSubtypes.isNotEmpty()) {
-            registerSubtypes(*additionalSubtypes.toTypedArray())
+    private val yamlMapper = YAMLMapper.builder()
+        .addModule(kotlinModule())
+        .findAndAddModules()
+        .disable(YAMLWriteFeature.USE_NATIVE_TYPE_ID)
+        .enable(SerializationFeature.INDENT_OUTPUT)
+        .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+        .apply {
+            if (additionalSubtypes.isNotEmpty()) {
+                registerSubtypes(*additionalSubtypes.toTypedArray())
+            }
         }
-    }
+        .build()
 
     override fun save(entity: StepSpec<*>): StepSpec<*> {
         val dirFile = File(dir)

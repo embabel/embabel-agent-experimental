@@ -18,13 +18,13 @@ package com.embabel.agent.spec
 import com.embabel.agent.spec.model.GoalSpec
 import com.embabel.agent.spec.model.PromptedActionSpec
 import com.embabel.agent.spec.model.StepSpec
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.dataformat.yaml.YAMLMapper
+import tools.jackson.module.kotlin.kotlinModule
 
 class StepSpecParsingTest {
 
@@ -32,7 +32,10 @@ class StepSpecParsingTest {
 
     @BeforeEach
     fun setUp() {
-        yamlMapper = ObjectMapper(YAMLFactory()).registerKotlinModule()
+        yamlMapper = YAMLMapper.builder()
+            .addModule(kotlinModule())
+            .findAndAddModules()
+            .build()
     }
 
     @Nested

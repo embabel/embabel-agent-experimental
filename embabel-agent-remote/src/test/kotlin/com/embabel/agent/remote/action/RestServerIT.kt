@@ -18,13 +18,14 @@ package com.embabel.agent.remote.action
 import com.embabel.agent.core.Action
 import com.embabel.agent.core.ProcessContext
 import com.embabel.agent.test.integration.IntegrationTestUtils.dummyAgentPlatform
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import tools.jackson.module.kotlin.jacksonObjectMapper
+import tools.jackson.module.kotlin.jsonMapper
 import java.net.Socket
 
 /**
@@ -62,12 +63,11 @@ class RestServerIT {
             name = "python",
             description = "python actions",
         )
-        val objectMapper = jacksonObjectMapper()
-        val restClient = RestServer.createRestClient(objectMapper)
+        val restClient = RestServer.createRestClient(jsonMapper())
         val restServer = RestServer(
             registration,
             restClient,
-            objectMapper,
+            jacksonObjectMapper(),
         )
         val agentScope = restServer.agentScope(agentPlatform)
         assertTrue(agentScope.actions.isNotEmpty(), "Should have had agents")
@@ -81,12 +81,11 @@ class RestServerIT {
             name = "python",
             description = "python actions",
         )
-        val objectMapper = jacksonObjectMapper()
-        val restClient = RestServer.createRestClient(objectMapper)
+        val restClient = RestServer.createRestClient(jsonMapper())
         val restServer = RestServer(
             registration,
             restClient,
-            objectMapper,
+            jacksonObjectMapper(),
         )
         val agentScope = restServer.agentScope(agentPlatform)
         assertTrue(agentScope.actions.isNotEmpty(), "Should have had agents")
