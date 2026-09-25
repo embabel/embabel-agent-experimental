@@ -56,7 +56,7 @@ import kotlin.time.Duration.Companion.seconds
  * @param shell shell used to interpret commands inside the container
  * @param timeout per-command execution timeout
  */
-class ScratchTool(
+class ScratchTool @JvmOverloads constructor(
     private val sessionManager: SandboxSessionManager,
     private val config: SandboxConfig = SandboxConfig(enabled = true, image = DEFAULT_IMAGE, memory = "1g", cpus = "2.0"),
     private val owner: String? = null,
@@ -70,6 +70,7 @@ class ScratchTool(
         For Node: node -e 'code'. For multi-line code, write to a file first.
         If a command fails, diagnose the error and try again — DO NOT give up.
         Install missing packages if needed (pip install, apt-get, npm install).
+        When scratch_publish is available, use it to publish selected finished files.
     """.trimIndent(),
     private val shell: String = "bash",
     private val timeout: Duration = 60.seconds,
@@ -98,6 +99,7 @@ class ScratchTool(
         ),
     )
 
+    @Synchronized
     override fun call(input: String): Tool.Result {
         return try {
             @Suppress("UNCHECKED_CAST")
@@ -108,11 +110,17 @@ class ScratchTool(
 
             val command = wrapIfCode(rawCommand)
             val active = ensureSession()
-            renderResult(active.execute(ExecutionRequest(
-                command = listOf(shell, "-c", command),
-                stdin = stdin,
-                timeout = timeout,
-            )))
+            // Feed the script through stdin so Docker's Windows CLI cannot reparse or
+            // truncate a multiline command argument (for example, a heredoc).
+            val request = if (stdin == null) {
+                ExecutionRequest(command = listOf(shell, "-s"), stdin = command, timeout = timeout)
+            } else {
+                ExecutionRequest(command = listOf(shell, "-c", command), stdin = stdin, timeout = timeout)
+            }
+            renderResult(active.execute(request))
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            Tool.Result.error("Command interrupted")
         } catch (e: Exception) {
             logger.warn("Scratch command failed: {}", e.message)
             Tool.Result.error("Command failed: ${e.message}")
@@ -151,17 +159,40 @@ class ScratchTool(
                     append(result.stderr)
                 }
             }
-            if (result.success) {
-                Tool.Result.text(combined.ifBlank { "(no output)" })
-            } else {
-                Tool.Result.text("Exit code ${result.exitCode}:\n$combined")
-            }
+            val text = if (result.success) combined.ifBlank { "(no output)" }
+                else "Exit code ${result.exitCode}:\n$combined"
+            if (result.artifacts.isEmpty()) Tool.Result.text(text)
+            else Tool.Result.withArtifact(text, result.artifacts)
         }
         is ExecutionResult.TimedOut -> Tool.Result.text("Command timed out after ${timeout.inWholeSeconds}s")
         is ExecutionResult.Failed -> Tool.Result.error("Command failed: ${result.error}")
         is ExecutionResult.Denied -> Tool.Result.error("Command denied: ${result.reason}")
     }
 
+    /** Publish selected files from the same persistent session used by [call]. */
+    @Synchronized
+    internal fun publishFiles(containerPaths: List<String>): Tool.Result = try {
+        val publisher = ensureSession() as? ArtifactPublishingSession
+            ?: return Tool.Result.error("This sandbox session does not support artifact publishing")
+        val result = publisher.publishFiles(containerPaths)
+        val text = buildString {
+            result.files.forEach { appendLine("Published ${it.containerPath}") }
+            result.failures.forEach { (path, error) -> appendLine("Failed $path: $error") }
+            if (result.files.isNotEmpty()) {
+                appendLine("Published files were exported successfully. Do not regenerate or republish them unless they change.")
+            }
+        }.trim()
+        if (result.files.isEmpty()) Tool.Result.error(text.ifBlank { "No files were published" })
+        else Tool.Result.withArtifact(text, result.files.map(PublishedFile::artifact))
+    } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        Tool.Result.error("File publication interrupted")
+    } catch (e: Exception) {
+        logger.warn("Scratch batch publication failed: {}", e.message)
+        Tool.Result.error("Could not publish files: ${e.message}")
+    }
+
+    @Synchronized
     override fun close() {
         val s = session ?: return
         try {
@@ -180,7 +211,7 @@ class ScratchTool(
         val trimmed = command.trim()
 
         val pythonIndicators = listOf("import ", "from ", "def ", "class ", "print(", "numpy", "pandas")
-        if (pythonIndicators.any { trimmed.startsWith(it) || trimmed.contains("\n$it") }) {
+        if (pythonIndicators.any { trimmed.startsWith(it) }) {
             if (!trimmed.startsWith("python")) {
                 logger.debug("Auto-wrapping as Python script")
                 val escaped = trimmed.replace("'", "'\\''")
@@ -189,7 +220,7 @@ class ScratchTool(
         }
 
         val jsIndicators = listOf("const ", "let ", "var ", "console.log", "require(")
-        if (jsIndicators.any { trimmed.startsWith(it) || trimmed.contains("\n$it") }) {
+        if (jsIndicators.any { trimmed.startsWith(it) }) {
             if (!trimmed.startsWith("node")) {
                 logger.debug("Auto-wrapping as Node.js script")
                 val escaped = trimmed.replace("'", "'\\''")
