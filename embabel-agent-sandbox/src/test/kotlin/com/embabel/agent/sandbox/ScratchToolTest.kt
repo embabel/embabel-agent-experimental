@@ -18,7 +18,7 @@ package com.embabel.agent.sandbox
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.sandbox.docker.DockerExecutor
 import com.embabel.agent.sandbox.docker.DockerSandboxSessionManager
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.embabel.common.util.EmbabelObjectMapperHolder
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
@@ -71,7 +71,8 @@ class ScratchToolTest {
             EOF
             python3 /tmp/scratch-heredoc.py
         """.trimIndent()
-        val input = jacksonObjectMapper().writeValueAsString(mapOf("command" to command))
+        val input = EmbabelObjectMapperHolder.createDefault().get()
+            .writeValueAsString(mapOf("command" to command))
         val text = resultText(newScratch().call(input))
         assertTrue(text.contains("heredoc intact"), "Multiline script should execute: $text")
     }

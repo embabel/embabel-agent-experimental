@@ -23,7 +23,6 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-compress</artifactId>
-            <version>1.28.0</version>
         </dependency>
         <!-- Minimal dependencies - sandbox should be lightweight -->
         <dependency>
@@ -44,8 +43,8 @@
         </dependency>
 
         <dependency>
-            <groupId>com.fasterxml.jackson.module</groupId>
-            <artifactId>jackson-module-kotlin</artifactId>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-ai</artifactId>
             <optional>true</optional>
         </dependency>
 

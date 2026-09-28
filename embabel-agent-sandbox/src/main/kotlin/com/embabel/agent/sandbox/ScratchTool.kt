@@ -16,7 +16,7 @@
 package com.embabel.agent.sandbox
 
 import com.embabel.agent.api.tool.Tool
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.embabel.common.util.EmbabelObjectMapperHolder
 import org.slf4j.LoggerFactory
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
@@ -58,7 +58,12 @@ import kotlin.time.Duration.Companion.seconds
  */
 class ScratchTool @JvmOverloads constructor(
     private val sessionManager: SandboxSessionManager,
-    private val config: SandboxConfig = SandboxConfig(enabled = true, image = DEFAULT_IMAGE, memory = "1g", cpus = "2.0"),
+    private val config: SandboxConfig = SandboxConfig(
+        enabled = true,
+        image = DEFAULT_IMAGE,
+        memory = "1g",
+        cpus = "2.0"
+    ),
     private val owner: String? = null,
     private val ttl: Duration = 1.hours,
     name: String = "scratch_run",
@@ -77,7 +82,7 @@ class ScratchTool @JvmOverloads constructor(
 ) : Tool, AutoCloseable {
 
     private val logger = LoggerFactory.getLogger(ScratchTool::class.java)
-    private val objectMapper = jacksonObjectMapper()
+    private val objectMapper = EmbabelObjectMapperHolder.createDefault().get()
 
     @Volatile
     private var session: SandboxSession? = null
@@ -89,7 +94,7 @@ class ScratchTool @JvmOverloads constructor(
             Tool.Parameter.string(
                 "command",
                 "The bash command to run in the sandbox. Can be multi-line. " +
-                    "Examples: 'pip install pandas', 'python3 script.py', 'ls -la /workspace'",
+                        "Examples: 'pip install pandas', 'python3 script.py', 'ls -la /workspace'",
             ),
             Tool.Parameter.string(
                 "stdin",
@@ -136,6 +141,7 @@ class ScratchTool @JvmOverloads constructor(
                 current.resume()
                 current
             }
+
             SandboxSession.SessionState.CLOSED, null -> {
                 if (current != null) {
                     logger.info("Previous scratch session {} was closed — creating a new one", current.id)
@@ -160,10 +166,11 @@ class ScratchTool @JvmOverloads constructor(
                 }
             }
             val text = if (result.success) combined.ifBlank { "(no output)" }
-                else "Exit code ${result.exitCode}:\n$combined"
+            else "Exit code ${result.exitCode}:\n$combined"
             if (result.artifacts.isEmpty()) Tool.Result.text(text)
             else Tool.Result.withArtifact(text, result.artifacts)
         }
+
         is ExecutionResult.TimedOut -> Tool.Result.text("Command timed out after ${timeout.inWholeSeconds}s")
         is ExecutionResult.Failed -> Tool.Result.error("Command failed: ${result.error}")
         is ExecutionResult.Denied -> Tool.Result.error("Command denied: ${result.reason}")

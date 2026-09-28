@@ -15,7 +15,10 @@
  */
 package com.embabel.agent.sandbox
 
-/** Optional capability for exporting selected files from an existing persistent session. */
+/**
+ * Optional capability for exporting selected files from an existing persistent session.
+ * This interface is open so other [SandboxSession] implementations can support publication.
+ */
 interface ArtifactPublishingSession {
     /**
      * Publish one or more selected files at normalized absolute container paths.

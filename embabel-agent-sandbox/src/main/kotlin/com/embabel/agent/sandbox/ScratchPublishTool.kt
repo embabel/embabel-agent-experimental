@@ -16,11 +16,11 @@
 package com.embabel.agent.sandbox
 
 import com.embabel.agent.api.tool.Tool
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.embabel.common.util.EmbabelObjectMapperHolder
 
 /** Publishes explicitly selected files from a [ScratchTool]'s persistent sandbox session. */
 class ScratchPublishTool(private val scratchTool: ScratchTool) : Tool {
-    private val objectMapper = jacksonObjectMapper()
+    private val objectMapper = EmbabelObjectMapperHolder.createDefault().get()
 
     override val definition = Tool.Definition(
         name = "scratch_publish",

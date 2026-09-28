@@ -33,6 +33,16 @@
         <module>embabel-experimental-integration-tests</module>
     </modules>
 
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>1.28.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <scm>
         <url>https://github.com/embabel/embabel-agent-experimental</url>
         <connection>scm:git:https://github.com/embabel/embabel-agent-experimental.git</connection>

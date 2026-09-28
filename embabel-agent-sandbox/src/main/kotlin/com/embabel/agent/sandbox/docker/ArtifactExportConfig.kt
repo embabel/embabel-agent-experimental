@@ -19,7 +19,7 @@ import java.nio.file.Path
 import java.time.Duration
 
 /**
- * Opt-in publication of explicitly selected files from a persistent Docker session.
+ * Public, opt-in publication settings for applications creating persistent Docker sessions.
  * The application owns [hostRoot], published files, retention, and download access.
  * [maxFileBytes], [maxArchiveBytes], and [maxEntries] apply per selected file.
  * [maxFiles], [maxTotalBytes], and [timeout] apply to the whole batch, including
