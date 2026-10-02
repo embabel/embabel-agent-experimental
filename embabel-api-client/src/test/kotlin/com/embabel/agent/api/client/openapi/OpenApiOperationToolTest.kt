@@ -624,6 +624,34 @@ class OpenApiOperationToolTest {
         }
 
         @Test
+        fun `a query parameter whose NAME has brackets is sent, percent-encoded`() {
+            /* Rails-style array parameters — `status[]=active&status[]=terminated` — are how a great
+             * many APIs take a list. The VALUE was encoded and the NAME was not, so `build(true)`
+             * refused the whole request ("Invalid character '[' for QUERY_PARAM") and an operation
+             * that declared such a parameter could never be called at all. */
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/subscriptions",
+                operation = Operation().apply {
+                    operationId = "subscriptionsList"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "status[]"
+                            `in` = "query"
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/subscriptions?status%5B%5D=terminated"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"status[]": "terminated"}""")
+            assertIsText(result, "[]")
+            server.verify()
+        }
+
+        @Test
         fun `GET with integer query parameter`() {
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.GET, "/pets",
