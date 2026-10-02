@@ -52,11 +52,15 @@ sealed interface LearnedApiSpec {
      *   instead of the one derived from the spec. The pack/workspace uses
      *   this so the gateway namespace matches the pack author's declared
      *   name (e.g. `gh`), not the verbose spec title (`githubV3RestApi`).
+     * @param serverVariables values for the `{name}` variables in an OpenAPI
+     *   spec's `servers` URLs, overriding their defaults. Ignored by spec types
+     *   whose endpoint is not templated.
      */
     fun toFactory(
         tags: Set<String>? = null,
         operationIds: Set<String>? = null,
         nameOverride: String? = null,
+        serverVariables: Map<String, String> = emptyMap(),
     ): (ApiCredentials) -> ProgressiveTool
 
     /**
@@ -81,6 +85,7 @@ sealed interface LearnedApiSpec {
             tags: Set<String>?,
             operationIds: Set<String>?,
             nameOverride: String?,
+            serverVariables: Map<String, String>,
         ): (ApiCredentials) -> ProgressiveTool = { credentials ->
             // Use the ref-preserving parse so each `OpenApiOperationTool`
             // can emit `{"$ref": "#/$defs/Foo"}` markers in its output
@@ -88,7 +93,10 @@ sealed interface LearnedApiSpec {
             // path derefs via `componentsSchemas` at call time, so request
             // construction still works against the named-component shape.
             val openApi = OpenApiLearner.parseSpecPreservingRefs(source, rawSpec)
-            OpenApiLearner.buildTool(source, openApi, credentials, tags, operationIds, nameOverride)
+            OpenApiLearner.buildTool(
+                source, openApi, credentials, tags, operationIds, nameOverride,
+                serverVariables = serverVariables,
+            )
         }
 
         override fun toModel(): ApiModel {
@@ -119,6 +127,7 @@ sealed interface LearnedApiSpec {
             tags: Set<String>?,
             operationIds: Set<String>?,
             nameOverride: String?,
+            serverVariables: Map<String, String>,
         ): (ApiCredentials) -> ProgressiveTool = { credentials ->
             // GraphQL doesn't have OpenAPI tags or operationIds —
             // ignored. Filtering by GraphQL field name is a separate
