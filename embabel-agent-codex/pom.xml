@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.embabel.agent</groupId>
+        <artifactId>embabel-agent-experimental</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>embabel-agent-codex</artifactId>
+    <packaging>jar</packaging>
+    <name>Embabel Agent Codex</name>
+    <description>Codex ChatGPT subscription OAuth and Responses ChatModel</description>
+    <url>https://github.com/embabel/embabel-agent-experimental</url>
+
+    <scm>
+        <url>https://github.com/embabel/embabel-agent-experimental</url>
+        <connection>scm:git:https://github.com/embabel/embabel-agent-experimental.git</connection>
+        <developerConnection>scm:git:https://github.com/embabel/embabel-agent-experimental.git</developerConnection>
+        <tag>HEAD</tag>
+    </scm>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-model</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+        </dependency>
+        <!--
+          Retry support lives in spring-core as of Spring Framework 7
+          (org.springframework.core.retry). Spring Boot 4 no longer manages
+          org.springframework.retry:spring-retry, so this module uses the
+          core retry API instead of reintroducing an unmanaged dependency.
+        -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-test-internal</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
