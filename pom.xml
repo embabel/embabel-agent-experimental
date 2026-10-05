@@ -2,23 +2,48 @@
 <project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
+
     <parent>
-        <groupId>com.embabel.agent</groupId>
-        <artifactId>embabel-agent-parent</artifactId>
-        <version>1.5.3</version>
+        <groupId>com.embabel.build</groupId>
+        <artifactId>embabel-build-parent</artifactId>
+        <version>2.0.3</version>
     </parent>
-    <!--
+    
     <groupId>com.embabel.agent</groupId>
-    -->
     <artifactId>embabel-agent-experimental</artifactId>
     <version>1.5.3-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <properties>
+        <embabel-agent.version>1.5.3</embabel-agent.version>
+        <embabel-common.version>2.0.4</embabel-common.version>
         <victools.version>5.0.0</victools.version>
     </properties>
     <name>Embabel Example Agent Experimental</name>
     <description>Example Agentic Experimental Models Incubation</description>
+
+
+    <!-- Embabel Common BOM -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- Embabel Agent BOM -->
+            <dependency>
+                <groupId>com.embabel.agent</groupId>
+                <artifactId>embabel-agent-dependencies</artifactId>
+                <version>${embabel-agent.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Embabel Common BOM -->
+            <dependency>
+                <groupId>com.embabel.common</groupId>
+                <artifactId>embabel-common-dependencies</artifactId>
+                <version>${embabel-common.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <modules>
         <module>embabel-agent-experimental-bom</module>
