@@ -45,6 +45,21 @@
         </dependencies>
     </dependencyManagement>
 
+    <!-- Inherited by all modules -->
+    <dependencies>
+        <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
+            <version>26.0.2</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
     <modules>
         <module>embabel-agent-experimental-bom</module>
         <module>embabel-agent-sandbox</module>

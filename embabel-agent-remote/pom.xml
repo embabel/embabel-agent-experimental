@@ -27,6 +27,12 @@
         </dependency>
 
         <!-- Test Dependencies -->
+        <dependency>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-test-internal</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Jackson 2 Kotlin module: used by tests; no longer provided transitively -->
         <dependency>
             <groupId>com.fasterxml.jackson.module</groupId>
