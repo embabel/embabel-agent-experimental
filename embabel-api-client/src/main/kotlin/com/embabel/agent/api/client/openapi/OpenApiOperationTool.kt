@@ -275,15 +275,41 @@ class OpenApiOperationTool(
         var cursor = 0
         PATH_PLACEHOLDER.findAll(path).forEach { match ->
             out.append(UriUtils.encodePath(path.substring(cursor, match.range.first), StandardCharsets.UTF_8))
-            val value = params[match.groupValues[1]]
+            val name = match.groupValues[1]
+            val value = params[name]
             out.append(
-                if (value != null) UriUtils.encodePathSegment(value.toString(), StandardCharsets.UTF_8)
+                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, value.toString()), StandardCharsets.UTF_8)
                 else UriUtils.encodePath(match.value, StandardCharsets.UTF_8),
             )
             cursor = match.range.last + 1
         }
         out.append(UriUtils.encodePath(path.substring(cursor), StandardCharsets.UTF_8))
         return out.toString()
+    }
+
+    /*
+     * `encodePathSegment` keeps a value inside its segment, but `.` is unreserved and never
+     * encoded, so a value that IS `.` or `..` became a dot segment: `GET /things/{id}` with `..`
+     * went out as `GET /things/..`, which a normalizing server or proxy reads as the parent route
+     * of the declared host (embabel/me#2418). Refused rather than sent as `%2E%2E`, because servers
+     * disagree on what an encoded dot means and some decode before they remove dot segments. For
+     * the same reason the value is judged after percent-decoding, so `%2e%2e` and `.%2E` are
+     * refused too, as is a value encoded twice for a proxy that decodes twice. A dot anywhere else,
+     * as in `v1.2` or `a..b`, makes no dot segment and passes untouched.
+     */
+    private fun refuseDotSegment(name: String, value: String): String {
+        var decoded: String? = value
+        for (round in 0..DOT_SEGMENT_DECODE_ROUNDS) {
+            if (decoded == "." || decoded == "..") {
+                throw IllegalArgumentException(
+                    "Path parameter '$name' is '$value', which a server reads as a path step rather than a value; the request was not sent",
+                )
+            }
+            if (decoded == null || '%' !in decoded) break
+            // A malformed escape is not a dot; the value is sent encoded, as any other would be.
+            decoded = runCatching { UriUtils.decode(decoded, StandardCharsets.UTF_8) }.getOrNull()
+        }
+        return value
     }
 
     /**
@@ -561,6 +587,10 @@ class OpenApiOperationTool(
 
         /** `{name}` in a path template. Compiled once; used to find the names AND to substitute. */
         private val PATH_PLACEHOLDER = Regex("\\{([^}]+)}")
+
+        /* Percent-decodings tried when looking for a dot segment: one per decoding layer a server
+         * or a proxy in front of it might apply. */
+        private const val DOT_SEGMENT_DECODE_ROUNDS = 3
 
         /**
          * Metadata key for the JSON Schema string describing the tool's
