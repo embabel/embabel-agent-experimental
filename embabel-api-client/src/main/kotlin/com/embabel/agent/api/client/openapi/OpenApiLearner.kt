@@ -291,17 +291,33 @@ class OpenApiLearner(
             credentials: ApiCredentials,
             clientProperties: OpenApiClientProperties,
         ): RestClient {
-            val httpClient = java.net.http.HttpClient.newBuilder()
-                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                .connectTimeout(clientProperties.connectTimeout)
-                .build()
-            val requestFactory = org.springframework.http.client.JdkClientHttpRequestFactory(httpClient).apply {
-                setReadTimeout(clientProperties.readTimeout)
-            }
+            /* Redirects are followed by CredentialSafeRedirects, not the JDK client, so the
+             * credential applied below never follows a hop to another origin. */
+            val requestFactory = CredentialSafeRedirects.overJdkClient(
+                connectTimeout = clientProperties.connectTimeout,
+                readTimeout = clientProperties.readTimeout,
+                credentialQueryParameters = queryCredentialNames(openApi, credentials),
+            )
             val builder = RestClient.builder().requestFactory(requestFactory)
             applyCredentials(builder, openApi, credentials)
             return builder.build()
         }
+
+        /** The query parameters [applyCredentials] puts a credential in, mirroring its choice of scheme. */
+        private fun queryCredentialNames(openApi: OpenAPI, credentials: ApiCredentials): Set<String> =
+            when (credentials) {
+                is ApiCredentials.ApiKey -> listOfNotNull(apiKeyScheme(openApi))
+                    .filter { it.`in` == SecurityScheme.In.QUERY }
+                    .mapTo(mutableSetOf()) { it.name }
+                is ApiCredentials.Multiple -> credentials.credentials
+                    .flatMapTo(mutableSetOf()) { queryCredentialNames(openApi, it) }
+                else -> emptySet()
+            }
+
+        private fun apiKeyScheme(openApi: OpenAPI): SecurityScheme? =
+            openApi.components?.securitySchemes?.values
+                ?.filterIsInstance<SecurityScheme>()
+                ?.find { it.type == SecurityScheme.Type.APIKEY }
 
         private fun applyCredentials(
             builder: RestClient.Builder,
@@ -316,9 +332,7 @@ class OpenApiLearner(
                 }
 
                 is ApiCredentials.ApiKey -> {
-                    val apiKeyScheme = openApi.components?.securitySchemes?.values
-                        ?.filterIsInstance<SecurityScheme>()
-                        ?.find { it.type == SecurityScheme.Type.APIKEY }
+                    val apiKeyScheme = apiKeyScheme(openApi)
 
                     if (apiKeyScheme != null) {
                         when (apiKeyScheme.`in`) {
