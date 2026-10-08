@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.AfterEach
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.seconds
 
 class ScratchToolTest {
 
@@ -50,6 +52,35 @@ class ScratchToolTest {
     private fun newScratch(): ScratchTool {
         val mgr = DockerSandboxSessionManager().also { sessionManager = it }
         return ScratchTool(sessionManager = mgr).also { scratch = it }
+    }
+
+    @Test
+    fun `constructors are callable from Java`() {
+        // A constructor with a kotlin.time.Duration parameter compiles to a private
+        // constructor plus synthetic bridges, which javac cannot call. Java needs real
+        // public constructors, and the framework convention is java.time.Duration.
+        val javaVisible = ScratchTool::class.java.constructors.filter { !it.isSynthetic }
+
+        assertTrue(
+            javaVisible.any { it.parameterTypes.contentEquals(arrayOf(SandboxSessionManager::class.java)) },
+            "Expected a public ScratchTool(SandboxSessionManager) constructor, found: ${javaVisible.map { it.parameterTypes.toList() }}",
+        )
+        assertTrue(
+            javaVisible.any { it.parameterTypes.contains(java.time.Duration::class.java) },
+            "Expected a public constructor taking java.time.Duration",
+        )
+        assertTrue(
+            javaVisible.none { it.parameterTypes.contains(Long::class.javaPrimitiveType) },
+            "No public constructor should expose kotlin.time.Duration as a raw long",
+        )
+    }
+
+    @Test
+    fun `kotlin duration constructor is kept for source compatibility`() {
+        val mgr = DockerSandboxSessionManager().also { sessionManager = it }
+        val tool = ScratchTool(sessionManager = mgr, ttl = 2.hours, timeout = 30.seconds).also { scratch = it }
+        assertEquals(ScratchTool.DEFAULT_NAME, tool.definition.name)
+        tool.close() // no session was created, so nothing to destroy
     }
 
     @Test
