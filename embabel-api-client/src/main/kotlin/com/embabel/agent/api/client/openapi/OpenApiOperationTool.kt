@@ -269,18 +269,20 @@ class OpenApiOperationTool(
         //
         // So: static stretches get `encodePath` (which preserves the separators they legitimately
         // contain), and each substituted value gets `encodePathSegment` (which does NOT, because a
-        // value is one segment and a slash inside it is data). An unfilled placeholder is encoded
-        // as the template text it still is, exactly as before.
+        // value is one segment and a slash inside it is data). Missing values are refused:
+        // leaving the placeholder in the URI would send a request to the wrong resource.
         val out = StringBuilder()
         var cursor = 0
         PATH_PLACEHOLDER.findAll(path).forEach { match ->
             out.append(UriUtils.encodePath(path.substring(cursor, match.range.first), StandardCharsets.UTF_8))
             val name = match.groupValues[1]
             val value = params[name]
-            out.append(
-                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, value.toString()), StandardCharsets.UTF_8)
-                else UriUtils.encodePath(match.value, StandardCharsets.UTF_8),
-            )
+                ?: throw IllegalArgumentException(
+                    "Missing required path parameter '$name' for operation " +
+                        "'${operation.operationId ?: path}' ($httpMethod $path). " +
+                        "Provided arguments: ${params.keys}",
+                )
+            out.append(UriUtils.encodePathSegment(refuseDotSegment(name, value.toString()), StandardCharsets.UTF_8))
             cursor = match.range.last + 1
         }
         out.append(UriUtils.encodePath(path.substring(cursor), StandardCharsets.UTF_8))
