@@ -20,6 +20,10 @@
     </scm>
 
     <dependencies>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-compress</artifactId>
+        </dependency>
         <!-- Minimal dependencies - sandbox should be lightweight -->
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -39,8 +43,8 @@
         </dependency>
 
         <dependency>
-            <groupId>com.fasterxml.jackson.module</groupId>
-            <artifactId>jackson-module-kotlin</artifactId>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-ai</artifactId>
             <optional>true</optional>
         </dependency>
 

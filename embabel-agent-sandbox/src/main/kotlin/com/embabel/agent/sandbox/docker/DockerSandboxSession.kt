@@ -17,15 +17,29 @@ package com.embabel.agent.sandbox.docker
 
 import com.embabel.agent.sandbox.ExecutionRequest
 import com.embabel.agent.sandbox.ExecutionResult
+import com.embabel.agent.sandbox.ExecutionArtifact
+import com.embabel.agent.sandbox.ArtifactPublishingSession
+import com.embabel.agent.sandbox.ArtifactPublication
+import com.embabel.agent.sandbox.PublishedFile
 import com.embabel.agent.sandbox.SandboxConfig
 import com.embabel.agent.sandbox.SandboxSession
 import org.slf4j.LoggerFactory
+import java.io.OutputStream
+import java.io.InputStream
 import java.nio.file.Path
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.time.Duration
-import kotlin.time.measureTime
+import kotlin.time.TimeSource
+import java.io.IOException
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.time.toJavaDuration
 
 /**
  * Docker-backed [SandboxSession] that maintains a long-lived container.
@@ -39,6 +53,7 @@ import kotlin.time.measureTime
  * @param config sandbox configuration
  * @param owner optional owner identifier
  * @param ttl time-to-live for idle eviction
+ * @param artifactExport optional explicit publication; published files are owned by the application
  */
 class DockerSandboxSession(
     override val label: String,
@@ -46,9 +61,11 @@ class DockerSandboxSession(
     override val owner: String? = null,
     val ttl: Duration,
     override val metadata: Map<String, String> = emptyMap(),
-) : SandboxSession {
+    private val artifactExport: ArtifactExportConfig? = null,
+) : SandboxSession, ArtifactPublishingSession {
 
     private val logger = LoggerFactory.getLogger(DockerSandboxSession::class.java)
+    private val operationLock = ReentrantLock()
 
     override val id: String = UUID.randomUUID().toString().take(12)
 
@@ -134,6 +151,236 @@ class DockerSandboxSession(
     }
 
     override fun execute(request: ExecutionRequest): ExecutionResult {
+        // Callbacks run while output streams, but never on a thread that execute waits for
+        // while holding operationLock. A callback may itself call close or copyFrom.
+        val started = TimeSource.Monotonic.markNow()
+        val callbacks = request.stdoutCallback?.let { StdoutCallbacks(it) }
+        val effectiveRequest = callbacks?.let { callback ->
+            request.copy(stdoutCallback = { line ->
+                val remaining = (request.timeout - started.elapsedNow()).inWholeNanoseconds
+                if (remaining <= 0) throw TimeoutException("Stdout callback delivery timed out")
+                callback.submit(line, remaining)
+            })
+        } ?: request
+        var locked = false
+        val result = try {
+            locked = operationLock.tryLock(request.timeout.inWholeNanoseconds.coerceAtLeast(0), TimeUnit.NANOSECONDS)
+            val remaining = request.timeout - started.elapsedNow()
+            if (!locked || !remaining.isPositive()) ExecutionResult.TimedOut(duration = started.elapsedNow())
+            else executeLocked(effectiveRequest.copy(timeout = remaining))
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            ExecutionResult.Failed("Session execution interrupted", cause = e)
+        } finally {
+            if (locked) operationLock.unlock()
+            callbacks?.finish()
+        }
+        try {
+            if (callbacks != null && !callbacks.await(request.timeout - started.elapsedNow())) {
+                return ExecutionResult.TimedOut(duration = started.elapsedNow())
+            }
+        } catch (e: InterruptedException) {
+            callbacks?.cancel()
+            Thread.currentThread().interrupt()
+            return ExecutionResult.Failed("Session execution interrupted", cause = e)
+        }
+        return result
+    }
+
+    private fun executeLocked(request: ExecutionRequest): ExecutionResult {
+        check(state == SandboxSession.SessionState.ACTIVE) {
+            "Cannot execute in session '$id' with state $state"
+        }
+        return try {
+            executeCommand(request)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            ExecutionResult.Failed("Session execution interrupted", cause = e)
+        } catch (e: Exception) {
+            ExecutionResult.Failed("Session execution failed: ${e.message}", cause = e)
+        } finally {
+            lastActiveAt = Instant.now()
+        }
+    }
+
+    override fun publishFiles(containerPaths: List<String>): ArtifactPublication {
+        val paths = containerPaths.toList()
+        val export = requireNotNull(artifactExport) { "Artifact publishing is not configured" }
+        require(paths.isNotEmpty() && paths.size <= export.maxFiles) {
+            "Select between 1 and ${export.maxFiles} files per publication"
+        }
+        require(paths.distinct().size == paths.size) { "Publication paths must not contain duplicates" }
+        paths.forEach { publishedFileName(it) }
+        return withPublication { cid, settings, deadline ->
+            val exporter = DockerArtifactExporter(settings)
+            val files = mutableListOf<PublishedFile>()
+            val failures = linkedMapOf<String, String>()
+            var remainingBytes = settings.maxTotalBytes
+            for (path in paths) {
+                try {
+                    deadline.remainingNanos()
+                    val file = publishSelectedFile(cid, path, exporter, deadline,
+                        minOf(settings.maxFileBytes, remainingBytes))
+                    files.add(PublishedFile(path, file))
+                    remainingBytes -= file.sizeBytes
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    failures[path] = "Publication interrupted"
+                } catch (e: ArtifactPayloadLimitException) {
+                    failures[path] = if (remainingBytes < settings.maxFileBytes) {
+                        "Selected file exceeds remaining batch maxTotalBytes ($remainingBytes bytes)"
+                    } else requireNotNull(e.message)
+                } catch (e: Exception) {
+                    failures[path] = e.message ?: "Publication failed"
+                }
+            }
+            ArtifactPublication(files, failures)
+        }
+    }
+
+    private fun <T> withPublication(action: (String, ArtifactExportConfig, ArtifactDeadline) -> T): T {
+        val export = requireNotNull(artifactExport) { "Artifact publishing is not configured" }
+        val deadline = ArtifactDeadline(export.timeout)
+        var locked = false
+        try {
+            locked = operationLock.tryLock(deadline.remainingNanos(), TimeUnit.NANOSECONDS)
+            if (!locked) throw IOException("Artifact publication timed out waiting for the session")
+            check(state == SandboxSession.SessionState.ACTIVE) { "Cannot publish from session '$id' with state $state" }
+            val cid = requireNotNull(containerId) { "No container ID" }
+            return action(cid, export, deadline)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw e
+        } finally {
+            if (locked) {
+                lastActiveAt = Instant.now()
+                operationLock.unlock()
+            }
+        }
+    }
+
+    private fun publishSelectedFile(
+        cid: String, path: String, exporter: DockerArtifactExporter,
+        deadline: ArtifactDeadline, maxPayloadBytes: Long,
+    ): ExecutionArtifact.File {
+        // Pass paths as positional arguments, never as shell syntax. Archive validation
+        // independently checks the selected leaf and bounds actual transferred bytes.
+        ArtifactTransfer.run(listOf("docker", "exec", "-i", cid, "sh", "-s", "--", path),
+            OutputStream.nullOutputStream(), 4096, deadline, stdin = VALIDATE_PUBLISH_SOURCE)
+        return exporter.export(cid, path, deadline, maxPayloadBytes)
+    }
+
+    private companion object {
+        private const val MAX_CAPTURED_CHARS = 1_048_576
+        private const val MAX_CALLBACK_LINE_CHARS = 65_536
+        private const val CALLBACK_QUEUE_SIZE = 64
+
+        // POSIX sh only: no Python, hashing utility, or temporary container file required.
+        val VALIDATE_PUBLISH_SOURCE = """
+            set -efu
+            source_path=${'$'}1
+            ancestor=${'$'}source_path
+            while [ "${'$'}ancestor" != / ]; do
+                if [ -L "${'$'}ancestor" ]; then
+                    echo 'Cannot publish a symbolic link or a path through one' >&2
+                    exit 2
+                fi
+                ancestor=${'$'}{ancestor%/*}
+                [ -n "${'$'}ancestor" ] || ancestor=/
+            done
+            if [ ! -e "${'$'}source_path" ]; then
+                echo 'Selected file does not exist or is inaccessible' >&2
+                exit 3
+            fi
+            if [ ! -f "${'$'}source_path" ]; then
+                echo 'Selected path is not a regular file' >&2
+                exit 4
+            fi
+        """.trimIndent()
+    }
+
+    private class CallbackOutputLimitException(message: String) : IOException(message)
+
+    private class StdoutCallbacks(private val callback: (String) -> Unit) {
+        private val finished = AtomicBoolean()
+        private val lines = ArrayBlockingQueue<String>(CALLBACK_QUEUE_SIZE)
+        private val worker = Thread {
+            while (true) {
+                val next = try { lines.poll(50, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { break }
+                if (next == null) {
+                    if (finished.get() && lines.isEmpty()) break
+                    continue
+                }
+                try {
+                    callback(next)
+                } catch (_: InterruptedException) {
+                    break
+                } catch (_: Exception) {
+                    // Callback failures must not prevent stdout from being drained.
+                }
+            }
+        }.apply { isDaemon = true; name = "sandbox-stdout-callback"; start() }
+
+        fun submit(line: String, remainingNanos: Long) {
+            if (!lines.offer(line, remainingNanos, TimeUnit.NANOSECONDS)) {
+                throw TimeoutException("Stdout callback delivery timed out")
+            }
+        }
+
+        fun finish() {
+            finished.set(true)
+        }
+
+        fun cancel() = worker.interrupt()
+
+        fun await(remaining: Duration): Boolean {
+            if (remaining.isPositive()) TimeUnit.NANOSECONDS.timedJoin(worker, remaining.inWholeNanoseconds)
+            if (worker.isAlive) {
+                worker.interrupt()
+                return false
+            }
+            return true
+        }
+    }
+
+    private fun readStdout(stream: InputStream, request: ExecutionRequest): String {
+        val captured = StringBuilder()
+        val callbackLine = request.stdoutCallback?.let { StringBuilder() }
+        var truncated = false
+        stream.reader().use { reader ->
+            val buffer = CharArray(4096)
+            while (true) {
+                val count = reader.read(buffer)
+                if (count < 0) break
+                for (i in 0 until count) {
+                    val char = buffer[i]
+                    if (request.captureOutput) {
+                        if (captured.length < MAX_CAPTURED_CHARS) captured.append(char)
+                        else truncated = true
+                    }
+                    if (callbackLine != null) {
+                        if (char == '\n') {
+                            request.stdoutCallback?.invoke(callbackLine.toString().trimEnd('\r'))
+                            callbackLine.setLength(0)
+                        } else {
+                            if (callbackLine.length >= MAX_CALLBACK_LINE_CHARS) {
+                                throw CallbackOutputLimitException("Stdout callback line exceeded $MAX_CALLBACK_LINE_CHARS characters")
+                            }
+                            callbackLine.append(char)
+                        }
+                    }
+                }
+            }
+        }
+        if (callbackLine != null && callbackLine.isNotEmpty()) {
+            request.stdoutCallback?.invoke(callbackLine.toString().trimEnd('\r'))
+        }
+        if (!request.captureOutput) return ""
+        val text = captured.toString().replace("\r\n", "\n").removeSuffix("\n").trimEnd('\r')
+        return if (truncated) "$text\n[stdout truncated after $MAX_CAPTURED_CHARS characters]" else text
+    }
+
+    private fun executeCommand(request: ExecutionRequest): ExecutionResult {
         check(state == SandboxSession.SessionState.ACTIVE) {
             "Cannot execute in session '$id' with state $state"
         }
@@ -158,76 +405,86 @@ class DockerSandboxSession(
 
         logger.debug("Session '{}' exec: {}", id, request.command.joinToString(" ").take(100))
 
+        val started = TimeSource.Monotonic.markNow()
+        var process: Process? = null
+        val stdout = AtomicReference("")
+        val stderr = StringBuffer()
+        fun remainingNanos(): Long {
+            val remaining = (request.timeout - started.elapsedNow()).inWholeNanoseconds
+            if (remaining <= 0) throw TimeoutException("Command timed out")
+            return remaining
+        }
         return try {
-            val processBuilder = ProcessBuilder(execCmd)
-                .redirectErrorStream(false)
-
-            val process = processBuilder.start()
-
-            // Write stdin if provided
-            if (request.stdin != null) {
-                process.outputStream.bufferedWriter().use { it.write(request.stdin) }
-            } else {
-                process.outputStream.close()
-            }
-
-            // Read stdout with optional callback
-            val outputLines = mutableListOf<String>()
+            remainingNanos()
+            val running = ProcessBuilder(execCmd).start().also { process = it }
+            val ioFailure = AtomicReference<Exception?>()
             val stdoutThread = Thread {
                 try {
-                    process.inputStream.bufferedReader().useLines { lines ->
-                        lines.forEach { rawLine ->
-                            val line = rawLine.trimEnd('\r')
-                            outputLines.add(line)
-                            request.stdoutCallback?.invoke(line)
-                        }
-                    }
-                } catch (_: Exception) {
+                    stdout.set(readStdout(running.inputStream, request))
+                } catch (e: Exception) {
+                    ioFailure.compareAndSet(null, e)
+                    running.destroyForcibly()
                 }
-            }.apply { isDaemon = true; start() }
-
-            var stderr = ""
+            }.apply { isDaemon = true; name = "sandbox-stdout"; start() }
             val stderrThread = Thread {
-                stderr = process.errorStream.bufferedReader().readText()
-            }.apply { isDaemon = true; start() }
-
-            val completed: Boolean
-            val duration = measureTime {
-                completed = process.waitFor(
-                    request.timeout.inWholeMilliseconds,
-                    TimeUnit.MILLISECONDS,
-                )
+                try {
+                    running.errorStream.reader().use { reader ->
+                        val buffer = CharArray(4096)
+                        val characters = java.nio.CharBuffer.wrap(buffer)
+                        var truncated = false
+                        while (true) {
+                            val count = reader.read(buffer)
+                            if (count < 0) break
+                            if (request.captureOutput) {
+                                val retained = minOf(count, MAX_CAPTURED_CHARS - stderr.length)
+                                if (retained > 0) stderr.appendRange(characters, 0, retained)
+                                if (retained < count) truncated = true
+                            }
+                        }
+                        if (truncated) stderr.append("\n[stderr truncated after $MAX_CAPTURED_CHARS characters]")
+                    }
+                } catch (e: Exception) { ioFailure.compareAndSet(null, e) }
+            }.apply { isDaemon = true; name = "sandbox-stderr"; start() }
+            // Write concurrently with draining both output streams. A child may produce
+            // output before consuming all input, or may never consume its input at all.
+            val stdinThread = Thread {
+                try {
+                    running.outputStream.bufferedWriter().use { writer -> request.stdin?.let { writer.write(it) } }
+                } catch (e: Exception) { ioFailure.compareAndSet(null, e) }
+            }.apply { isDaemon = true; name = "sandbox-stdin"; start() }
+            if (!running.waitFor(remainingNanos(), TimeUnit.NANOSECONDS)) throw TimeoutException()
+            for (worker in listOf(stdoutThread, stderrThread, stdinThread)) {
+                TimeUnit.NANOSECONDS.timedJoin(worker, remainingNanos())
+                if (worker.isAlive) throw TimeoutException()
             }
-
-            if (!completed) {
-                process.destroyForcibly()
-                stdoutThread.join(1000)
-                stderrThread.join(1000)
-                lastActiveAt = Instant.now()
-                return ExecutionResult.TimedOut(
-                    partialStderr = stderr.takeIf { it.isNotBlank() },
-                    duration = duration,
-                )
+            // Preserve an actual nonzero command exit even if it closed stdin early.
+            val failure = ioFailure.get()
+            if (failure is TimeoutException) throw failure
+            if (failure is CallbackOutputLimitException || running.exitValue() == 0) {
+                failure?.let { throw IOException("Command I/O failed: ${it.message}", it) }
             }
-
-            stdoutThread.join()
-            stderrThread.join()
-
-            lastActiveAt = Instant.now()
-            ExecutionResult.Completed(
-                exitCode = process.exitValue(),
-                stdout = outputLines.joinToString("\n"),
-                stderr = stderr,
-                duration = duration,
-                artifacts = emptyList(),
-            )
+            ExecutionResult.Completed(running.exitValue(), stdout.get(),
+                stderr.toString(), started.elapsedNow())
+        } catch (e: TimeoutException) {
+            ExecutionResult.TimedOut(partialStderr = stderr.toString().takeIf { it.isNotBlank() },
+                duration = started.elapsedNow())
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            ExecutionResult.Failed("Session execution interrupted", cause = e)
         } catch (e: Exception) {
             logger.error("Session '{}' execution failed: {}", id, e.message, e)
-            ExecutionResult.Failed(error = "Execution failed: ${e.message}", cause = e)
+            ExecutionResult.Failed("Execution failed: ${e.message}", cause = e)
+        } finally {
+            process?.destroyForcibly()
+            lastActiveAt = Instant.now()
         }
     }
 
-    override fun copyFrom(containerPath: String, hostPath: Path) {
+    override fun copyFrom(containerPath: String, hostPath: Path) = operationLock.withLock {
+        copyFromContainer(containerPath, hostPath)
+    }
+
+    private fun copyFromContainer(containerPath: String, hostPath: Path) {
         val cid = containerId ?: throw IllegalStateException("No container")
         val process = ProcessBuilder("docker", "cp", "$cid:$containerPath", hostPath.toString())
             .redirectErrorStream(true)
@@ -238,7 +495,11 @@ class DockerSandboxSession(
         }
     }
 
-    override fun copyTo(hostPath: Path, containerPath: String) {
+    override fun copyTo(hostPath: Path, containerPath: String) = operationLock.withLock {
+        copyToContainer(hostPath, containerPath)
+    }
+
+    private fun copyToContainer(hostPath: Path, containerPath: String) {
         val cid = containerId ?: throw IllegalStateException("No container")
         // Ensure target directory exists
         ProcessBuilder("docker", "exec", cid, "mkdir", "-p", containerPath)
@@ -269,7 +530,9 @@ class DockerSandboxSession(
      * └──────────────────────┴──────────────────┴───────────┴────────────┴──────────────┘
      * ```
      */
-    override fun pause() {
+    override fun pause() = operationLock.withLock { pauseContainer() }
+
+    private fun pauseContainer() {
         if (state != SandboxSession.SessionState.ACTIVE) return
         val cid = containerId ?: return
 
@@ -290,7 +553,9 @@ class DockerSandboxSession(
      *
      * @see pause for why `unpause` is used instead of `start`
      */
-    override fun resume() {
+    override fun resume() = operationLock.withLock { resumeContainer() }
+
+    private fun resumeContainer() {
         check(state == SandboxSession.SessionState.PAUSED) {
             "Cannot resume session '$id' with state $state"
         }
@@ -309,7 +574,25 @@ class DockerSandboxSession(
         logger.info("Session '{}' ({}) resumed", label, id)
     }
 
-    override fun close() {
+    override fun close() = operationLock.withLock { closeContainer() }
+
+    internal fun evictIfIdle(pauseGracePeriod: Duration): Boolean {
+        if (!operationLock.tryLock()) return false
+        try {
+            val idle = java.time.Duration.between(lastActiveAt, Instant.now())
+            when (state) {
+                SandboxSession.SessionState.ACTIVE -> if (idle > ttl.toJavaDuration()) pauseContainer()
+                SandboxSession.SessionState.PAUSED ->
+                    if (idle > (ttl + pauseGracePeriod).toJavaDuration()) closeContainer()
+                SandboxSession.SessionState.CLOSED -> Unit
+            }
+            return state == SandboxSession.SessionState.CLOSED
+        } finally {
+            operationLock.unlock()
+        }
+    }
+
+    private fun closeContainer() {
         if (state == SandboxSession.SessionState.CLOSED) return
         val cid = containerId ?: return
 

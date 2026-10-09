@@ -19,11 +19,9 @@ import com.embabel.agent.sandbox.SandboxConfig
 import com.embabel.agent.sandbox.SandboxSession
 import com.embabel.agent.sandbox.SandboxSessionManager
 import org.slf4j.LoggerFactory
-import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
-import kotlin.time.toJavaDuration
 
 /**
  * Docker-backed [SandboxSessionManager] that manages persistent sandbox sessions.
@@ -34,12 +32,17 @@ import kotlin.time.toJavaDuration
  * @param maxSessionsPerOwner maximum concurrent sessions per owner (0 = unlimited)
  * @param maxTotalSessions maximum total concurrent sessions (0 = unlimited)
  * @param pauseGracePeriod how long a paused session survives before being closed
+ * @param artifactExport optional explicit file publication settings shared by sessions
  */
 class DockerSandboxSessionManager @JvmOverloads constructor(
     private val maxSessionsPerOwner: Int = 5,
     private val maxTotalSessions: Int = 20,
     private val pauseGracePeriod: Duration = 1.hours,
+    private val artifactExport: ArtifactExportConfig? = null,
 ) : SandboxSessionManager {
+
+    /** Java-friendly opt-in constructor for artifact export. */
+    constructor(artifactExport: ArtifactExportConfig) : this(5, 20, 1.hours, artifactExport)
 
     private val logger = LoggerFactory.getLogger(DockerSandboxSessionManager::class.java)
 
@@ -77,6 +80,7 @@ class DockerSandboxSessionManager @JvmOverloads constructor(
             owner = owner,
             ttl = ttl,
             metadata = metadata,
+            artifactExport = artifactExport,
         )
 
         sessions[session.id] = session
@@ -105,36 +109,9 @@ class DockerSandboxSessionManager @JvmOverloads constructor(
     }
 
     override fun evictExpired() {
-        val now = Instant.now()
-
         for ((id, session) in sessions) {
-            when (session.state) {
-                SandboxSession.SessionState.ACTIVE -> {
-                    // Pause if idle beyond TTL
-                    val idleSince = java.time.Duration.between(session.lastActiveAt, now)
-                    if (idleSince > session.ttl.toJavaDuration()) {
-                        logger.info(
-                            "Session '{}' ({}) idle for {} — pausing",
-                            session.label, id, idleSince,
-                        )
-                        session.pause()
-                    }
-                }
-                SandboxSession.SessionState.PAUSED -> {
-                    // Close if paused beyond grace period
-                    val pausedSince = java.time.Duration.between(session.lastActiveAt, now)
-                    if (pausedSince > (session.ttl + pauseGracePeriod).toJavaDuration()) {
-                        logger.info(
-                            "Session '{}' ({}) paused for {} — closing",
-                            session.label, id, pausedSince,
-                        )
-                        session.close()
-                        sessions.remove(id)
-                    }
-                }
-                SandboxSession.SessionState.CLOSED -> {
-                    sessions.remove(id)
-                }
+            if (session.evictIfIdle(pauseGracePeriod)) {
+                sessions.remove(id, session)
             }
         }
     }

@@ -18,6 +18,7 @@ package com.embabel.agent.sandbox
 import com.embabel.agent.api.tool.Tool
 import com.embabel.agent.sandbox.docker.DockerExecutor
 import com.embabel.agent.sandbox.docker.DockerSandboxSessionManager
+import com.embabel.common.util.EmbabelObjectMapperHolder
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
@@ -89,6 +90,22 @@ class ScratchToolTest {
 
         val text = resultText(newScratch().call("""{"command": "echo hello world"}"""))
         assertTrue(text.contains("hello world"), "Should contain output: $text")
+    }
+
+    @Test
+    fun `multiline heredoc reaches Docker intact`() {
+        assumeSandboxAvailable()
+
+        val command = """
+            cat > /tmp/scratch-heredoc.py <<'EOF'
+            print('heredoc intact')
+            EOF
+            python3 /tmp/scratch-heredoc.py
+        """.trimIndent()
+        val input = EmbabelObjectMapperHolder.createDefault().get()
+            .writeValueAsString(mapOf("command" to command))
+        val text = resultText(newScratch().call(input))
+        assertTrue(text.contains("heredoc intact"), "Multiline script should execute: $text")
     }
 
     @Test
