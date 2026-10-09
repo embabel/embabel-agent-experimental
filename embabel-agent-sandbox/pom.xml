@@ -4,7 +4,7 @@
     <parent>
         <groupId>com.embabel.agent</groupId>
         <artifactId>embabel-agent-experimental</artifactId>
-        <version>${revision}</version>
+        <version>1.5.4-SNAPSHOT</version>
     </parent>
     <artifactId>embabel-agent-sandbox</artifactId>
     <packaging>jar</packaging>
@@ -52,12 +52,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.jetbrains.kotlin</groupId>
-            <artifactId>kotlin-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

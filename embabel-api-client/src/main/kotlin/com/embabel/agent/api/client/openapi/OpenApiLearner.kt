@@ -175,8 +175,11 @@ class OpenApiLearner(
          * codegen, or any downstream consumer that needs more than the lossy
          * tool projection.
          */
-        fun buildModel(source: String, openApi: OpenAPI): ApiModel =
-            OpenApiModelBuilder.build(source, openApi)
+        fun buildModel(
+            source: String,
+            openApi: OpenAPI,
+            serverVariables: Map<String, String> = emptyMap(),
+        ): ApiModel = OpenApiModelBuilder.build(source, openApi, serverVariables)
 
         /**
          * Build a [ProgressiveTool] from a parsed OpenAPI spec.
@@ -189,6 +192,9 @@ class OpenApiLearner(
          * @param tags optional set of OpenAPI tag names to include. When non-null,
          *   only operations tagged with one of these values are exposed as tools.
          *   Tag matching is case-insensitive.
+         * @param serverVariables values for the `{name}` variables in the spec's
+         *   `servers` URLs, overriding each variable's `default`. This is how one
+         *   spec reaches a per-tenant host such as `https://{pageId}.statuspage.io`.
          */
         fun buildTool(
             source: String,
@@ -198,8 +204,9 @@ class OpenApiLearner(
             operationIds: Set<String>? = null,
             nameOverride: String? = null,
             clientProperties: OpenApiClientProperties = OpenApiClientProperties(),
+            serverVariables: Map<String, String> = emptyMap(),
         ): ProgressiveTool {
-            val model = buildModel(source, openApi)
+            val model = buildModel(source, openApi, serverVariables)
             val tagFiltered = if (tags != null) model.filterByTags(tags) else model
             // operationIds, when set, narrows further. The two filters
             // compose: tags narrow to a coarse subset, operationIds picks
@@ -239,7 +246,9 @@ class OpenApiLearner(
                 restClient,
                 model.allOperations,
                 includedNames,
+                serverVariables,
             )
+            warnUnusedServerVariables(openApi, serverVariables, filtered.name)
             val includedTools = allTools.filterKeys { it in includedNames }
 
             val toolsByResource = filtered.resources.associate { resource ->
@@ -282,17 +291,33 @@ class OpenApiLearner(
             credentials: ApiCredentials,
             clientProperties: OpenApiClientProperties,
         ): RestClient {
-            val httpClient = java.net.http.HttpClient.newBuilder()
-                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                .connectTimeout(clientProperties.connectTimeout)
-                .build()
-            val requestFactory = org.springframework.http.client.JdkClientHttpRequestFactory(httpClient).apply {
-                setReadTimeout(clientProperties.readTimeout)
-            }
+            /* Redirects are followed by CredentialSafeRedirects, not the JDK client, so the
+             * credential applied below never follows a hop to another origin. */
+            val requestFactory = CredentialSafeRedirects.overJdkClient(
+                connectTimeout = clientProperties.connectTimeout,
+                readTimeout = clientProperties.readTimeout,
+                credentialQueryParameters = queryCredentialNames(openApi, credentials),
+            )
             val builder = RestClient.builder().requestFactory(requestFactory)
             applyCredentials(builder, openApi, credentials)
             return builder.build()
         }
+
+        /** The query parameters [applyCredentials] puts a credential in, mirroring its choice of scheme. */
+        private fun queryCredentialNames(openApi: OpenAPI, credentials: ApiCredentials): Set<String> =
+            when (credentials) {
+                is ApiCredentials.ApiKey -> listOfNotNull(apiKeyScheme(openApi))
+                    .filter { it.`in` == SecurityScheme.In.QUERY }
+                    .mapTo(mutableSetOf()) { it.name }
+                is ApiCredentials.Multiple -> credentials.credentials
+                    .flatMapTo(mutableSetOf()) { queryCredentialNames(openApi, it) }
+                else -> emptySet()
+            }
+
+        private fun apiKeyScheme(openApi: OpenAPI): SecurityScheme? =
+            openApi.components?.securitySchemes?.values
+                ?.filterIsInstance<SecurityScheme>()
+                ?.find { it.type == SecurityScheme.Type.APIKEY }
 
         private fun applyCredentials(
             builder: RestClient.Builder,
@@ -307,9 +332,7 @@ class OpenApiLearner(
                 }
 
                 is ApiCredentials.ApiKey -> {
-                    val apiKeyScheme = openApi.components?.securitySchemes?.values
-                        ?.filterIsInstance<SecurityScheme>()
-                        ?.find { it.type == SecurityScheme.Type.APIKEY }
+                    val apiKeyScheme = apiKeyScheme(openApi)
 
                     if (apiKeyScheme != null) {
                         when (apiKeyScheme.`in`) {
@@ -394,9 +417,13 @@ class OpenApiLearner(
             return requirements.ifEmpty { listOf(AuthRequirement.None) }
         }
 
-        internal fun resolveBaseUrl(openApi: OpenAPI, source: String): String {
-            return resolveServerUrl(openApi.servers, source)
-                ?: openApi.paths?.values?.firstNotNullOfOrNull { resolveServerUrl(it.servers, source) }
+        internal fun resolveBaseUrl(
+            openApi: OpenAPI,
+            source: String,
+            serverVariables: Map<String, String> = emptyMap(),
+        ): String {
+            return resolveServerUrl(openApi.servers, source, serverVariables)
+                ?: openApi.paths?.values?.firstNotNullOfOrNull { resolveServerUrl(it.servers, source, serverVariables) }
                 ?: sourceAuthority(source)
         }
 
@@ -409,12 +436,58 @@ class OpenApiLearner(
          * Used both for spec-level resolution and for OpenAPI 3
          * operation/path-level `servers:` overrides.
          */
-        private fun resolveServerUrl(servers: List<Server>?, source: String): String? {
-            val raw = servers?.firstOrNull()?.url?.takeIf { it.isNotBlank() && it != "/" }
+        private fun resolveServerUrl(
+            servers: List<Server>?,
+            source: String,
+            serverVariables: Map<String, String>,
+        ): String? {
+            val server = servers?.firstOrNull() ?: return null
+            val raw = server.url?.takeIf { it.isNotBlank() && it != "/" }
+                ?.let { expandServerVariables(it, server, serverVariables) }
                 ?: return null
             return if (raw.startsWith("http://") || raw.startsWith("https://")) raw
             else sourceAuthority(source) + raw
         }
+
+        /**
+         * Substitute each `{name}` in a server URL: the caller's value first, then
+         * the variable's `default`. OpenAPI makes `default` required, so a variable
+         * with neither is an invalid spec. It is refused here, because the
+         * alternative is a request to the literal host `%7Bname%7D`, which fails
+         * far from its cause.
+         */
+        private fun expandServerVariables(url: String, server: Server, values: Map<String, String>): String =
+            SERVER_VARIABLE.replace(url) { match ->
+                val name = match.groupValues[1]
+                val declared = server.variables?.get(name)
+                val value = values[name] ?: declared?.default
+                    ?: throw IllegalArgumentException(
+                        "Server URL '$url' uses variable '{$name}', which has no default and was given no value",
+                    )
+                val allowed = declared?.enum
+                if (!allowed.isNullOrEmpty() && value !in allowed) {
+                    logger.warn("Server variable '{}' = '{}' is not one of the spec's values {}", name, value, allowed)
+                }
+                value
+            }
+
+        /** A supplied value that no server URL uses is almost always a misspelt name. */
+        private fun warnUnusedServerVariables(openApi: OpenAPI, values: Map<String, String>, apiName: String) {
+            if (values.isEmpty()) return
+            val serverLists = sequenceOf(openApi.servers) +
+                openApi.paths.orEmpty().values.asSequence().flatMap { pathItem ->
+                    sequenceOf(pathItem.servers) + pathItem.readOperations().orEmpty().map { it.servers }
+                }
+            val used = serverLists.filterNotNull().flatten()
+                .flatMap { server -> SERVER_VARIABLE.findAll(server.url.orEmpty()).map { it.groupValues[1] } }
+                .toSet()
+            val unused = values.keys - used
+            if (unused.isNotEmpty()) {
+                logger.warn("Server variables supplied for '{}' that no server URL uses: {}", apiName, unused.sorted())
+            }
+        }
+
+        private val SERVER_VARIABLE = Regex("[{]([^{}]+)[}]")
 
         private fun sourceAuthority(source: String): String {
             // A local spec file (including Windows paths, which don't even parse as
@@ -446,6 +519,7 @@ class OpenApiLearner(
             restClient: RestClient,
             modeledOperations: List<ApiOperation>,
             curatedOperationNames: Set<String>,
+            serverVariables: Map<String, String>,
         ): Map<String, Tool> {
             val tools = mutableMapOf<String, Tool>()
             val modeledByLocation = modeledOperations.associateBy { it.method.name to it.path }
@@ -468,7 +542,7 @@ class OpenApiLearner(
                 // OpenAPI 3 servers precedence: operation > path > spec.
                 // The spec-level fallback was already computed by the caller
                 // and passed in as `baseUrl`.
-                val pathBaseUrl = resolveServerUrl(pathItem.servers, source) ?: baseUrl
+                val pathBaseUrl = resolveServerUrl(pathItem.servers, source, serverVariables) ?: baseUrl
                 pathItem.readOperationsMap()?.forEach { (method, operation) ->
                     val mergedOperation = operation.apply {
                         val pathParams = pathItem.parameters ?: emptyList()
@@ -476,7 +550,7 @@ class OpenApiLearner(
                         val existingNames = opParams.map { it.name }.toSet()
                         parameters = opParams + pathParams.filter { it.name !in existingNames }
                     }
-                    val opBaseUrl = resolveServerUrl(mergedOperation.servers, source) ?: pathBaseUrl
+                    val opBaseUrl = resolveServerUrl(mergedOperation.servers, source, serverVariables) ?: pathBaseUrl
                     val modeledOperation = modeledByLocation[method.name to path]
                         ?: error("No modeled operation for ${method.name} $path in '$source'")
                     val previous = mergedByName.put(

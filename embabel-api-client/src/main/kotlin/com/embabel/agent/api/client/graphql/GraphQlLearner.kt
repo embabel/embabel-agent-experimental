@@ -160,11 +160,17 @@ class GraphQlLearner(
         }
 
         private fun buildApiClient(credentials: ApiCredentials): RestClient {
-            val httpClient = java.net.http.HttpClient.newBuilder()
-                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                .build()
+            /* Redirects are followed by CredentialSafeRedirects, as for OpenAPI, so the credential
+             * headers below never follow a hop to another origin. GraphQL credentials are all
+             * headers, so there is no query parameter to strip. */
             val builder = RestClient.builder()
-                .requestFactory(JdkClientHttpRequestFactory(httpClient))
+                .requestFactory(
+                    CredentialSafeRedirects.overJdkClient(
+                        connectTimeout = null,
+                        readTimeout = null,
+                        credentialQueryParameters = emptySet(),
+                    ),
+                )
 
             when (credentials) {
                 is ApiCredentials.None -> {}
