@@ -256,17 +256,6 @@ class OpenApiOperationTool(
         return declared + bodyProps
     }
 
-    /**
-     * Substitute every `{param}` placeholder in the path with the caller's argument.
-     *
-     * OpenAPI 3 requires path parameters to be `required: true`, so a missing or
-     * misnamed one is not optional data -- it's a call that cannot possibly reach
-     * the right resource. We throw here rather than let the literal placeholder
-     * survive into the URI: a request for `/shows/{id}` sent as-is is guaranteed
-     * to 404, and that 404 tells the caller nothing about which argument was
-     * missing. Naming the parameter and the keys actually supplied turns a dead
-     * end into something the caller (often an LLM) can correct and retry.
-     */
     private fun resolvePath(path: String, params: Map<String, Any?>): String {
         // Returns an ALREADY-ENCODED path, encoding the template and the values SEPARATELY —
         // because only here is it still known which characters came from the caller.
@@ -280,30 +269,49 @@ class OpenApiOperationTool(
         //
         // So: static stretches get `encodePath` (which preserves the separators they legitimately
         // contain), and each substituted value gets `encodePathSegment` (which does NOT, because a
-        // value is one segment and a slash inside it is data).
-        //
-        // A missing value is REFUSED, not passed through. OpenAPI 3 requires path parameters to
-        // be `required: true`, so an absent or misnamed one is not optional data — it is a call
-        // that cannot possibly reach the right resource. Letting the literal placeholder survive
-        // into the URI guarantees a 404 that says nothing about which argument was missing;
-        // naming the parameter and the keys actually supplied turns a dead end into something
-        // the caller (often an LLM) can correct and retry.
+        // value is one segment and a slash inside it is data). Missing values are refused:
+        // leaving the placeholder in the URI would send a request to the wrong resource.
         val out = StringBuilder()
         var cursor = 0
         PATH_PLACEHOLDER.findAll(path).forEach { match ->
             out.append(UriUtils.encodePath(path.substring(cursor, match.range.first), StandardCharsets.UTF_8))
-            val paramName = match.groupValues[1]
-            val value = params[paramName]
+            val name = match.groupValues[1]
+            val value = params[name]
                 ?: throw IllegalArgumentException(
-                    "Missing required path parameter '$paramName' for operation " +
+                    "Missing required path parameter '$name' for operation " +
                         "'${operation.operationId ?: path}' ($httpMethod $path). " +
                         "Provided arguments: ${params.keys}",
                 )
-            out.append(UriUtils.encodePathSegment(value.toString(), StandardCharsets.UTF_8))
+            out.append(UriUtils.encodePathSegment(refuseDotSegment(name, value.toString()), StandardCharsets.UTF_8))
             cursor = match.range.last + 1
         }
         out.append(UriUtils.encodePath(path.substring(cursor), StandardCharsets.UTF_8))
         return out.toString()
+    }
+
+    /*
+     * `encodePathSegment` keeps a value inside its segment, but `.` is unreserved and never
+     * encoded, so a value that IS `.` or `..` became a dot segment: `GET /things/{id}` with `..`
+     * went out as `GET /things/..`, which a normalizing server or proxy reads as the parent route
+     * of the declared host (embabel/me#2418). Refused rather than sent as `%2E%2E`, because servers
+     * disagree on what an encoded dot means and some decode before they remove dot segments. For
+     * the same reason the value is judged after percent-decoding, so `%2e%2e` and `.%2E` are
+     * refused too, as is a value encoded twice for a proxy that decodes twice. A dot anywhere else,
+     * as in `v1.2` or `a..b`, makes no dot segment and passes untouched.
+     */
+    private fun refuseDotSegment(name: String, value: String): String {
+        var decoded: String? = value
+        for (round in 0..DOT_SEGMENT_DECODE_ROUNDS) {
+            if (decoded == "." || decoded == "..") {
+                throw IllegalArgumentException(
+                    "Path parameter '$name' is '$value', which a server reads as a path step rather than a value; the request was not sent",
+                )
+            }
+            if (decoded == null || '%' !in decoded) break
+            // A malformed escape is not a dot; the value is sent encoded, as any other would be.
+            decoded = runCatching { UriUtils.decode(decoded, StandardCharsets.UTF_8) }.getOrNull()
+        }
+        return value
     }
 
     /**
@@ -476,9 +484,14 @@ class OpenApiOperationTool(
         // what a GeoJSON-ish polygon sent to an ArcGIS `/query` endpoint does.
         // Encoding first turns the braces into %7B/%7D, and `build(true)` is then
         // told the parts are already encoded so nothing re-encodes the `%`.
+        // The NAME is encoded for the same reason, and it matters as often: `status[]`, the
+        // Rails/PHP spelling of "this parameter is a list", has brackets `build(true)` refuses
+        // ("Invalid character '[' for QUERY_PARAM"), so an operation that declared one could not
+        // be called at all. A server decodes `status%5B%5D` to `status[]` before it looks at it.
         queryParams.forEach { (key, values) ->
+            val name = UriUtils.encodeQueryParam(key, StandardCharsets.UTF_8)
             values.forEach { value ->
-                builder.queryParam(key, UriUtils.encodeQueryParam(value, StandardCharsets.UTF_8))
+                builder.queryParam(name, UriUtils.encodeQueryParam(value, StandardCharsets.UTF_8))
             }
         }
 
@@ -576,6 +589,10 @@ class OpenApiOperationTool(
 
         /** `{name}` in a path template. Compiled once; used to find the names AND to substitute. */
         private val PATH_PLACEHOLDER = Regex("\\{([^}]+)}")
+
+        /* Percent-decodings tried when looking for a dot segment: one per decoding layer a server
+         * or a proxy in front of it might apply. */
+        private const val DOT_SEGMENT_DECODE_ROUNDS = 3
 
         /**
          * Metadata key for the JSON Schema string describing the tool's

@@ -4,7 +4,7 @@
     <parent>
         <groupId>com.embabel.agent</groupId>
         <artifactId>embabel-agent-experimental</artifactId>
-        <version>${revision}</version>
+        <version>1.5.4-SNAPSHOT</version>
     </parent>
     <artifactId>embabel-agent-remote</artifactId>
     <packaging>jar</packaging>
@@ -27,6 +27,12 @@
         </dependency>
 
         <!-- Test Dependencies -->
+        <dependency>
+            <groupId>com.embabel.agent</groupId>
+            <artifactId>embabel-agent-test-internal</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Jackson 2 Kotlin module: used by tests; no longer provided transitively -->
         <dependency>
             <groupId>com.fasterxml.jackson.module</groupId>

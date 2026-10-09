@@ -34,10 +34,10 @@ import java.util.HexFormat
  */
 internal object OpenApiModelBuilder {
 
-    fun build(source: String, openApi: OpenAPI): ApiModel {
+    fun build(source: String, openApi: OpenAPI, serverVariables: Map<String, String> = emptyMap()): ApiModel {
         val name = OpenApiLearner.deriveApiName(openApi)
         val description = OpenApiLearner.deriveApiDescription(openApi, source)
-        val baseUrl = OpenApiLearner.resolveBaseUrl(openApi, source)
+        val baseUrl = OpenApiLearner.resolveBaseUrl(openApi, source, serverVariables)
         val auth = OpenApiLearner.extractAuthRequirements(openApi)
         val types = extractNamedTypes(openApi)
         val operations = extractOperations(openApi, baseUrl)

@@ -624,6 +624,34 @@ class OpenApiOperationToolTest {
         }
 
         @Test
+        fun `a query parameter whose NAME has brackets is sent, percent-encoded`() {
+            /* Rails-style array parameters — `status[]=active&status[]=terminated` — are how a great
+             * many APIs take a list. The VALUE was encoded and the NAME was not, so `build(true)`
+             * refused the whole request ("Invalid character '[' for QUERY_PARAM") and an operation
+             * that declared such a parameter could never be called at all. */
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/subscriptions",
+                operation = Operation().apply {
+                    operationId = "subscriptionsList"
+                    parameters = listOf(
+                        Parameter().apply {
+                            name = "status[]"
+                            `in` = "query"
+                            schema = StringSchema()
+                        },
+                    )
+                },
+            )
+            server.expect(requestTo("https://api.example.com/subscriptions?status%5B%5D=terminated"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON))
+
+            val result = tool.call("""{"status[]": "terminated"}""")
+            assertIsText(result, "[]")
+            server.verify()
+        }
+
+        @Test
         fun `GET with integer query parameter`() {
             val (tool, server) = createToolWithMock(
                 PathItem.HttpMethod.GET, "/pets",
@@ -1616,13 +1644,7 @@ class OpenApiOperationToolTest {
     @Nested
     inner class PathParameterValidationTests {
 
-        /**
-         * A learned streaming API's `getShow` operation declares `GET /shows/{id}`.
-         * Calling it without `id` used to leave the literal `{id}` in the built
-         * URI, which the remote 404'd on every time -- a call that could never
-         * succeed, surfacing as an opaque HTTP error instead of naming the
-         * missing argument.
-         */
+        /** A learned streaming API's `getShow` operation declares `GET /shows/{id}`. */
         private fun getShowOperation() = Operation().apply {
             operationId = "getShow"
             parameters = listOf(
@@ -1646,8 +1668,24 @@ class OpenApiOperationToolTest {
 
             assertInstanceOf(Tool.Result.Error::class.java, result)
             val error = result as Tool.Result.Error
-            assertTrue(error.message.contains("id"), "Error should name the missing parameter 'id': ${error.message}")
+            assertTrue(error.message.contains("path parameter 'id'"), "Error should name the missing path parameter: ${error.message}")
+            assertTrue(error.message.contains("getShow"), "Error should name the operation: ${error.message}")
             server.verify() // no request expectations registered -- a request would fail verification
+        }
+
+        @Test
+        fun `null path parameter fails before sending a request`() {
+            val (tool, server) = createToolWithMock(
+                PathItem.HttpMethod.GET, "/shows/{id}",
+                operation = getShowOperation(),
+            )
+
+            val result = tool.call("""{"id": null}""")
+
+            assertInstanceOf(Tool.Result.Error::class.java, result)
+            val error = result as Tool.Result.Error
+            assertTrue(error.message.contains("path parameter 'id'"), "Error should name the null path parameter: ${error.message}")
+            server.verify()
         }
 
         @Test
