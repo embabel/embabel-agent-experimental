@@ -16,6 +16,7 @@
 package com.embabel.agent.sandbox.docker
 
 import com.embabel.agent.sandbox.SandboxConfig
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.condition.DisabledOnOs
@@ -23,6 +24,9 @@ import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ForkJoinPool
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.time.Duration.Companion.hours
@@ -58,6 +62,23 @@ class DockerSandboxSessionStartTest {
         )
 
         assertEquals("4f2a9c1e7b3d", start(docker).containerId)
+    }
+
+    /** A pull's progress can outgrow the pipe; it must be drained even when the shared pool is busy. */
+    @Test
+    fun `a start drains a full stderr pipe while the common pool is busy`() {
+        val script = dir.resolve("docker")
+        Files.writeString(script, "#!/bin/sh\nhead -c 300000 /dev/zero | tr '\\0' x >&2\nprintf '%s\\n' 4f2a9c1e7b3d0123\n")
+        script.toFile().setExecutable(true)
+        val release = CountDownLatch(1)
+        val pool = ForkJoinPool.commonPool()
+        repeat(pool.parallelism) { pool.execute { release.await() } }
+        try {
+            val id = assertTimeoutPreemptively<String?>(Duration.ofSeconds(20)) { start(script.toString()).containerId }
+            assertEquals("4f2a9c1e7b3d", id)
+        } finally {
+            release.countDown()
+        }
     }
 
     @Test

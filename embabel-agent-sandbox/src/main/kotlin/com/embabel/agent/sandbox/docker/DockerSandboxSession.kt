@@ -23,7 +23,6 @@ import org.slf4j.LoggerFactory
 import java.nio.file.Path
 import java.time.Instant
 import java.util.UUID
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.measureTime
@@ -124,13 +123,18 @@ class DockerSandboxSession(
         // stdout carries only the container id; stderr carries pull progress ("Unable to find image …"),
         // so the two are read apart (embabel-agent-experimental#46).
         val process = ProcessBuilder(cmd).start()
-        val stderr = CompletableFuture.supplyAsync { process.errorStream.bufferedReader().readText().trim() }
+        // A thread of its own, as [execute] uses: a pooled task can sit queued behind other sessions'
+        // starts while Docker blocks on a full stderr pipe.
+        var stderr = ""
+        val stderrThread = Thread { stderr = process.errorStream.bufferedReader().readText().trim() }
+            .apply { isDaemon = true; start() }
         val output = process.inputStream.bufferedReader().readText().trim()
         val exitCode = process.waitFor()
+        stderrThread.join()
 
         if (exitCode != 0) {
             state = SandboxSession.SessionState.CLOSED
-            throw RuntimeException("Failed to start sandbox container: ${listOf(stderr.join(), output).filter { it.isNotEmpty() }.joinToString("\n")}")
+            throw RuntimeException("Failed to start sandbox container: ${listOf(stderr, output).filter { it.isNotEmpty() }.joinToString("\n")}")
         }
 
         containerId = output.take(12)
