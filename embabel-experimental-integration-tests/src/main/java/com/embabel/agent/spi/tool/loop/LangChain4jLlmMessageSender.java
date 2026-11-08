@@ -20,6 +20,9 @@ import com.embabel.agent.core.Usage;
 import com.embabel.agent.spi.loop.LlmMessageResponse;
 import com.embabel.agent.spi.loop.LlmMessageSender;
 import com.embabel.chat.*;
+import com.embabel.common.core.thinking.ThinkingBlock;
+import com.embabel.common.core.thinking.ThinkingOrigin;
+import com.embabel.common.core.thinking.ThinkingTagType;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
@@ -35,6 +38,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * LangChain4j implementation of {@link LlmMessageSender}.
@@ -95,11 +99,29 @@ public class LangChain4jLlmMessageSender implements LlmMessageSender {
         // Convert response to Embabel format
         var embabelMessage = convertAiMessage(aiMessage);
         var usage = convertUsage(response.tokenUsage());
+        var thinkingBlocks = extractThinkingBlocks(aiMessage);
 
         return new LlmMessageResponse(
             embabelMessage,
             aiMessage.text() != null ? aiMessage.text() : "",
-            usage
+            usage,
+            thinkingBlocks
+        );
+    }
+
+    /**
+     * Extract native thinking (reasoning) blocks from the LangChain4j response.
+     *
+     * <p>LangChain4j surfaces provider-native reasoning via {@link AiMessage#thinking()}.
+     * Returns an empty list when the model produced no reasoning.
+     */
+    private List<ThinkingBlock> extractThinkingBlocks(AiMessage aiMessage) {
+        String thinking = aiMessage.thinking();
+        if (thinking == null || thinking.isBlank()) {
+            return List.of();
+        }
+        return List.of(
+            new ThinkingBlock(thinking, ThinkingTagType.NO_PREFIX, "", ThinkingOrigin.NATIVE, Map.of())
         );
     }
 

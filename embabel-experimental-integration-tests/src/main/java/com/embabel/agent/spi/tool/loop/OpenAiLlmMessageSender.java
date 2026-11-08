@@ -20,7 +20,11 @@ import com.embabel.agent.core.Usage;
 import com.embabel.agent.spi.loop.LlmMessageResponse;
 import com.embabel.agent.spi.loop.LlmMessageSender;
 import com.embabel.chat.*;
+import com.embabel.common.core.thinking.ThinkingBlock;
+import com.embabel.common.core.thinking.ThinkingOrigin;
+import com.embabel.common.core.thinking.ThinkingTagType;
 import com.openai.client.OpenAIClient;
+import com.openai.core.JsonString;
 import com.openai.core.JsonValue;
 import com.openai.models.ChatModel;
 import com.openai.models.FunctionDefinition;
@@ -128,11 +132,35 @@ public class OpenAiLlmMessageSender implements LlmMessageSender {
         // Convert response to Embabel format
         var embabelMessage = convertResponseMessage(responseMessage);
         var usage = convertUsage(completion);
+        var thinkingBlocks = extractThinkingBlocks(responseMessage);
 
         return new LlmMessageResponse(
             embabelMessage,
             responseMessage.content().orElse(""),
-            usage
+            usage,
+            thinkingBlocks
+        );
+    }
+
+    /**
+     * Extract native thinking (reasoning) blocks from the OpenAI response.
+     *
+     * <p>Reasoning models (o-series) return a {@code reasoning} field that this SDK version
+     * does not model as a typed accessor; it is captured in the message's additional
+     * properties via {@code @JsonAnySetter}. Non-reasoning models (e.g. gpt-4o-mini) return
+     * none, in which case an empty list is returned.
+     */
+    private List<ThinkingBlock> extractThinkingBlocks(ChatCompletionMessage responseMessage) {
+        JsonValue reasoning = responseMessage._additionalProperties().get("reasoning");
+        if (!(reasoning instanceof JsonString reasoningText)) {
+            return List.of();
+        }
+        String text = reasoningText.value();
+        if (text == null || text.isBlank()) {
+            return List.of();
+        }
+        return List.of(
+            new ThinkingBlock(text, ThinkingTagType.NO_PREFIX, "", ThinkingOrigin.NATIVE, Map.of())
         );
     }
 
