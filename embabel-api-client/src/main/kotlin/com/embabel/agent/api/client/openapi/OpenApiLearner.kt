@@ -92,9 +92,8 @@ class OpenApiLearner(
                 val path = if (scheme == "file") java.nio.file.Path.of(uri) else java.nio.file.Path.of(source)
                 return java.nio.file.Files.readString(path)
             }
-            val httpClient = java.net.http.HttpClient.newBuilder()
-                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                .build()
+            /* Shared: a client per fetch held a selector thread until it was collected. */
+            val httpClient = SharedHttpClients.redirectFollowing
             val request = java.net.http.HttpRequest.newBuilder()
                 .uri(uri)
                 .GET()
