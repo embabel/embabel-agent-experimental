@@ -151,11 +151,9 @@ class GraphQlLearner(
         }
 
         private fun buildIntrospectionClient(): RestClient {
-            val httpClient = java.net.http.HttpClient.newBuilder()
-                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                .build()
+            /* No credential rides on introspection, so the shared redirect-following client is safe. */
             return RestClient.builder()
-                .requestFactory(JdkClientHttpRequestFactory(httpClient))
+                .requestFactory(JdkClientHttpRequestFactory(SharedHttpClients.redirectFollowing))
                 .build()
         }
 

@@ -15,6 +15,7 @@
  */
 package com.embabel.agent.api.client.explorer
 
+import com.embabel.agent.api.client.SharedHttpClients
 import com.embabel.agent.api.tool.Tool
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.slf4j.LoggerFactory
@@ -22,26 +23,26 @@ import org.springframework.http.MediaType
 import org.springframework.http.client.JdkClientHttpRequestFactory
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientResponseException
+import java.net.http.HttpClient
 
 /**
  * A [Tool] that allows an AI agent to make HTTP requests for API exploration.
  *
  * Supports GET and POST with optional headers and body. Responses are
  * truncated to avoid overwhelming the LLM context.
+ *
+ * By default every probe sends through one shared JDK client that follows redirects, because a
+ * client built per instance kept its selector thread alive after the instance was gone (#52).
+ * A caller that wants the client tied to its own lifecycle passes [httpClient] and closes it.
  */
-class HttpProbeTool(
+class HttpProbeTool @JvmOverloads constructor(
     private val maxResponseLength: Int = 4000,
+    httpClient: HttpClient = SharedHttpClients.redirectFollowing,
 ) : Tool {
 
     private val objectMapper = jacksonObjectMapper()
     private val restClient = RestClient.builder()
-        .requestFactory(
-            JdkClientHttpRequestFactory(
-                java.net.http.HttpClient.newBuilder()
-                    .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                    .build()
-            )
-        )
+        .requestFactory(JdkClientHttpRequestFactory(httpClient))
         .build()
 
     override val definition: Tool.Definition = Tool.Definition(

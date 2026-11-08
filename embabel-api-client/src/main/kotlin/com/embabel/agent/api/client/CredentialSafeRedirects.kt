@@ -175,16 +175,32 @@ class CredentialSafeRedirects(
         /**
          * The factory every credentialed API client is built on: a JDK client that never follows
          * a redirect itself, wrapped so that redirects are followed here.
+         *
+         * The JDK client is shared by every factory with the same [connectTimeout] (see
+         * [SharedHttpClients]); only the wrapper and the read timeout are per call, so building a
+         * factory per tool no longer costs a selector thread per tool.
          */
         fun overJdkClient(
             connectTimeout: Duration?,
             readTimeout: Duration?,
             credentialQueryParameters: Set<String>,
+        ): ClientHttpRequestFactory =
+            overClient(SharedHttpClients.redirectRefusing(connectTimeout), readTimeout, credentialQueryParameters)
+
+        /**
+         * As [overJdkClient], over a [client] the caller owns and closes with its own lifecycle.
+         * The client must be built with `Redirect.NEVER`: one that follows redirects itself would
+         * carry every credential header past the checks here, so any other policy is refused
+         * rather than quietly trusted.
+         */
+        fun overClient(
+            client: HttpClient,
+            readTimeout: Duration?,
+            credentialQueryParameters: Set<String>,
         ): ClientHttpRequestFactory {
-            val client = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NEVER)
-                .apply { connectTimeout?.let { connectTimeout(it) } }
-                .build()
+            require(client.followRedirects() == HttpClient.Redirect.NEVER) {
+                "CredentialSafeRedirects follows redirects itself; the JDK client must use Redirect.NEVER, not ${client.followRedirects()}"
+            }
             val jdk = JdkClientHttpRequestFactory(client).apply {
                 readTimeout?.let { setReadTimeout(it) }
             }
