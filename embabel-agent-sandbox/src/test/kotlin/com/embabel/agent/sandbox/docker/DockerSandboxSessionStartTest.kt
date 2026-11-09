@@ -27,8 +27,10 @@ import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ForkJoinPool
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.hours
 
 /**
@@ -72,8 +74,10 @@ class DockerSandboxSessionStartTest {
         script.toFile().setExecutable(true)
         val release = CountDownLatch(1)
         val pool = ForkJoinPool.commonPool()
-        repeat(pool.parallelism) { pool.execute { release.await() } }
+        val running = CountDownLatch(pool.parallelism)
+        repeat(pool.parallelism) { pool.execute { running.countDown(); release.await() } }
         try {
+            assertTrue(running.await(10, TimeUnit.SECONDS), "common pool was not saturated")
             val id = assertTimeoutPreemptively<String?>(Duration.ofSeconds(20)) { start(script.toString()).containerId }
             assertEquals("4f2a9c1e7b3d", id)
         } finally {
