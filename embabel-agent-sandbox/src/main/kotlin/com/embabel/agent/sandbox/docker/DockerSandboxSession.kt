@@ -46,6 +46,8 @@ class DockerSandboxSession(
     override val owner: String? = null,
     val ttl: Duration,
     override val metadata: Map<String, String> = emptyMap(),
+    /** The Docker CLI to run; tests substitute a fake one. */
+    internal val docker: String = "docker",
 ) : SandboxSession {
 
     private val logger = LoggerFactory.getLogger(DockerSandboxSession::class.java)
@@ -82,7 +84,7 @@ class DockerSandboxSession(
      */
     private fun startContainer() {
         val cmd = mutableListOf(
-            "docker", "run", "-d",
+            docker, "run", "-d",
             "--name", containerName,
         )
 
@@ -118,15 +120,21 @@ class DockerSandboxSession(
 
         cmd.addAll(listOf(config.image, "sleep", "infinity"))
 
-        val process = ProcessBuilder(cmd)
-            .redirectErrorStream(true)
-            .start()
+        // stdout carries only the container id; stderr carries pull progress ("Unable to find image …"),
+        // so the two are read apart (embabel-agent-experimental#46).
+        val process = ProcessBuilder(cmd).start()
+        // A thread of its own, as [execute] uses: a pooled task can sit queued behind other sessions'
+        // starts while Docker blocks on a full stderr pipe.
+        var stderr = ""
+        val stderrThread = Thread { stderr = process.errorStream.bufferedReader().readText().trim() }
+            .apply { isDaemon = true; start() }
         val output = process.inputStream.bufferedReader().readText().trim()
         val exitCode = process.waitFor()
+        stderrThread.join()
 
         if (exitCode != 0) {
             state = SandboxSession.SessionState.CLOSED
-            throw RuntimeException("Failed to start sandbox container: $output")
+            throw RuntimeException("Failed to start sandbox container: ${listOf(stderr, output).filter { it.isNotEmpty() }.joinToString("\n")}")
         }
 
         containerId = output.take(12)
@@ -140,7 +148,7 @@ class DockerSandboxSession(
 
         val cid = containerId ?: return ExecutionResult.Failed("No container ID")
 
-        val execCmd = mutableListOf("docker", "exec")
+        val execCmd = mutableListOf(docker, "exec")
         if (request.stdin != null) execCmd.add("-i")
 
         // Set working directory if specified
@@ -229,7 +237,7 @@ class DockerSandboxSession(
 
     override fun copyFrom(containerPath: String, hostPath: Path) {
         val cid = containerId ?: throw IllegalStateException("No container")
-        val process = ProcessBuilder("docker", "cp", "$cid:$containerPath", hostPath.toString())
+        val process = ProcessBuilder(docker, "cp", "$cid:$containerPath", hostPath.toString())
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.bufferedReader().readText()
@@ -241,11 +249,11 @@ class DockerSandboxSession(
     override fun copyTo(hostPath: Path, containerPath: String) {
         val cid = containerId ?: throw IllegalStateException("No container")
         // Ensure target directory exists
-        ProcessBuilder("docker", "exec", cid, "mkdir", "-p", containerPath)
+        ProcessBuilder(docker, "exec", cid, "mkdir", "-p", containerPath)
             .redirectErrorStream(true).start().waitFor(5, TimeUnit.SECONDS)
         // Append /. to copy directory CONTENTS, not the directory itself
         val source = if (hostPath.toFile().isDirectory) "${hostPath}/." else hostPath.toString()
-        val process = ProcessBuilder("docker", "cp", source, "$cid:$containerPath")
+        val process = ProcessBuilder(docker, "cp", source, "$cid:$containerPath")
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.bufferedReader().readText()
@@ -273,7 +281,7 @@ class DockerSandboxSession(
         if (state != SandboxSession.SessionState.ACTIVE) return
         val cid = containerId ?: return
 
-        val process = ProcessBuilder("docker", "pause", cid)
+        val process = ProcessBuilder(docker, "pause", cid)
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.bufferedReader().readText().trim()
@@ -296,7 +304,7 @@ class DockerSandboxSession(
         }
         val cid = containerId ?: throw IllegalStateException("No container ID")
 
-        val process = ProcessBuilder("docker", "unpause", cid)
+        val process = ProcessBuilder(docker, "unpause", cid)
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.bufferedReader().readText().trim()
@@ -314,7 +322,7 @@ class DockerSandboxSession(
         val cid = containerId ?: return
 
         try {
-            ProcessBuilder("docker", "rm", "-f", cid)
+            ProcessBuilder(docker, "rm", "-f", cid)
                 .redirectErrorStream(true)
                 .start()
                 .waitFor(10, TimeUnit.SECONDS)
