@@ -4,12 +4,12 @@
     <parent>
         <groupId>com.embabel.build</groupId>
         <artifactId>embabel-dependencies-parent</artifactId>
-        <version>2.0.3</version>
+        <version>2.0.4</version>
         <relativePath />
     </parent>
     <groupId>com.embabel.agent</groupId>
     <artifactId>embabel-agent-experimental-bom</artifactId>
-    <version>1.5.4-SNAPSHOT</version>
+    <version>1.5.5-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Embabel Agent Experimental BOM</name>

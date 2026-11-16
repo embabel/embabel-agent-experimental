@@ -99,7 +99,8 @@ public class LangChain4jLlmMessageSender implements LlmMessageSender {
         return new LlmMessageResponse(
             embabelMessage,
             aiMessage.text() != null ? aiMessage.text() : "",
-            usage
+            usage,
+            List.of()
         );
     }
 
