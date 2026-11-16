@@ -5,17 +5,17 @@
     <parent>
         <groupId>com.embabel.build</groupId>
         <artifactId>embabel-build-parent</artifactId>
-        <version>2.0.3</version>
+        <version>2.0.4</version>
     </parent>
     
     <groupId>com.embabel.agent</groupId>
     <artifactId>embabel-agent-experimental</artifactId>
-    <version>1.5.4-SNAPSHOT</version>
+    <version>1.5.5-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <properties>
-        <embabel-agent.version>1.5.3</embabel-agent.version>
-        <embabel-common.version>2.0.4</embabel-common.version>
+        <embabel-agent.version>1.5.4</embabel-agent.version>
+        <embabel-common.version>2.0.5</embabel-common.version>
         <victools.version>5.0.0</victools.version>
     </properties>
     <name>Embabel Example Agent Experimental</name>

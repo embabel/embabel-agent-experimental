@@ -132,7 +132,8 @@ public class OpenAiLlmMessageSender implements LlmMessageSender {
         return new LlmMessageResponse(
             embabelMessage,
             responseMessage.content().orElse(""),
-            usage
+            usage,
+            List.of()
         );
     }
 
