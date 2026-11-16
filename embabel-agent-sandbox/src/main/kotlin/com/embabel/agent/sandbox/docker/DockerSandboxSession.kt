@@ -27,6 +27,9 @@ import java.util.concurrent.TimeUnit
 import kotlin.time.Duration
 import kotlin.time.measureTime
 
+internal fun isMissingDockerContainer(output: String): Boolean =
+    output.contains("Error response from daemon: No such container", ignoreCase = true)
+
 /**
  * Docker-backed [SandboxSession] that maintains a long-lived container.
  *
@@ -220,7 +223,9 @@ class DockerSandboxSession(
                 stderr = stderr,
                 duration = duration,
                 artifacts = emptyList(),
-            )
+            ).also { result ->
+                if (!result.success) closeIfContainerMissing(result.stderr)
+            }
         } catch (e: Exception) {
             logger.error("Session '{}' execution failed: {}", id, e.message, e)
             ExecutionResult.Failed(error = "Execution failed: ${e.message}", cause = e)
@@ -234,6 +239,7 @@ class DockerSandboxSession(
             .start()
         val output = process.inputStream.bufferedReader().readText()
         if (process.waitFor() != 0) {
+            closeIfContainerMissing(output)
             throw RuntimeException("docker cp failed: $output")
         }
     }
@@ -241,8 +247,13 @@ class DockerSandboxSession(
     override fun copyTo(hostPath: Path, containerPath: String) {
         val cid = containerId ?: throw IllegalStateException("No container")
         // Ensure target directory exists
-        ProcessBuilder("docker", "exec", cid, "mkdir", "-p", containerPath)
-            .redirectErrorStream(true).start().waitFor(5, TimeUnit.SECONDS)
+        val mkdir = ProcessBuilder("docker", "exec", cid, "mkdir", "-p", containerPath)
+            .redirectErrorStream(true).start()
+        if (mkdir.waitFor(5, TimeUnit.SECONDS)) {
+            closeIfContainerMissing(mkdir.inputStream.bufferedReader().readText())
+        } else {
+            mkdir.destroyForcibly()
+        }
         // Append /. to copy directory CONTENTS, not the directory itself
         val source = if (hostPath.toFile().isDirectory) "${hostPath}/." else hostPath.toString()
         val process = ProcessBuilder("docker", "cp", source, "$cid:$containerPath")
@@ -250,8 +261,31 @@ class DockerSandboxSession(
             .start()
         val output = process.inputStream.bufferedReader().readText()
         if (process.waitFor() != 0) {
+            closeIfContainerMissing(output)
             throw RuntimeException("docker cp failed: $output")
         }
+    }
+
+    @Synchronized
+    private fun closeIfContainerMissing(output: String) {
+        if (state != SandboxSession.SessionState.CLOSED && isMissingDockerContainer(output) && containerConfirmedMissing()) {
+            logger.warn("Session '{}' container disappeared; closing stale handle", id)
+            state = SandboxSession.SessionState.CLOSED
+            containerId = null
+        }
+    }
+
+    private fun containerConfirmedMissing(): Boolean {
+        val cid = containerId ?: return true
+        val inspect = ProcessBuilder("docker", "inspect", cid).redirectErrorStream(true).start()
+        if (!inspect.waitFor(5, TimeUnit.SECONDS)) {
+            inspect.destroyForcibly()
+            return false
+        }
+        val output = inspect.inputStream.bufferedReader().readText()
+        return inspect.exitValue() != 0 && (
+            output.contains("no such object", ignoreCase = true) || isMissingDockerContainer(output)
+        )
     }
 
     /**
@@ -269,6 +303,7 @@ class DockerSandboxSession(
      * └──────────────────────┴──────────────────┴───────────┴────────────┴──────────────┘
      * ```
      */
+    @Synchronized
     override fun pause() {
         if (state != SandboxSession.SessionState.ACTIVE) return
         val cid = containerId ?: return
@@ -278,6 +313,7 @@ class DockerSandboxSession(
             .start()
         val output = process.inputStream.bufferedReader().readText().trim()
         if (process.waitFor() != 0) {
+            closeIfContainerMissing(output)
             throw RuntimeException("Failed to pause container: $output")
         }
 
@@ -290,6 +326,7 @@ class DockerSandboxSession(
      *
      * @see pause for why `unpause` is used instead of `start`
      */
+    @Synchronized
     override fun resume() {
         check(state == SandboxSession.SessionState.PAUSED) {
             "Cannot resume session '$id' with state $state"
@@ -301,6 +338,7 @@ class DockerSandboxSession(
             .start()
         val output = process.inputStream.bufferedReader().readText().trim()
         if (process.waitFor() != 0) {
+            closeIfContainerMissing(output)
             throw RuntimeException("Failed to resume container: $output")
         }
 
@@ -309,6 +347,7 @@ class DockerSandboxSession(
         logger.info("Session '{}' ({}) resumed", label, id)
     }
 
+    @Synchronized
     override fun close() {
         if (state == SandboxSession.SessionState.CLOSED) return
         val cid = containerId ?: return

@@ -63,7 +63,9 @@ class DockerSandboxSessionManager @JvmOverloads constructor(
         }
 
         if (owner != null && maxSessionsPerOwner > 0) {
-            val ownerCount = sessions.values.count { it.owner == owner }
+            val ownerCount = sessions.values.count {
+                it.owner == owner && it.state != SandboxSession.SessionState.CLOSED
+            }
             if (ownerCount >= maxSessionsPerOwner) {
                 throw IllegalStateException(
                     "Maximum sessions per owner ($maxSessionsPerOwner) reached for '$owner'."
@@ -108,34 +110,36 @@ class DockerSandboxSessionManager @JvmOverloads constructor(
         val now = Instant.now()
 
         for ((id, session) in sessions) {
-            when (session.state) {
-                SandboxSession.SessionState.ACTIVE -> {
-                    // Pause if idle beyond TTL
-                    val idleSince = java.time.Duration.between(session.lastActiveAt, now)
-                    if (idleSince > session.ttl.toJavaDuration()) {
-                        logger.info(
-                            "Session '{}' ({}) idle for {} — pausing",
-                            session.label, id, idleSince,
-                        )
-                        session.pause()
+            try {
+                when (session.state) {
+                    SandboxSession.SessionState.ACTIVE -> {
+                        // Pause if idle beyond TTL
+                        val idleSince = java.time.Duration.between(session.lastActiveAt, now)
+                        if (idleSince > session.ttl.toJavaDuration()) {
+                            logger.info(
+                                "Session '{}' ({}) idle for {} — pausing",
+                                session.label, id, idleSince,
+                            )
+                            session.pause()
+                        }
                     }
-                }
-                SandboxSession.SessionState.PAUSED -> {
-                    // Close if paused beyond grace period
-                    val pausedSince = java.time.Duration.between(session.lastActiveAt, now)
-                    if (pausedSince > (session.ttl + pauseGracePeriod).toJavaDuration()) {
-                        logger.info(
-                            "Session '{}' ({}) paused for {} — closing",
-                            session.label, id, pausedSince,
-                        )
-                        session.close()
-                        sessions.remove(id)
+                    SandboxSession.SessionState.PAUSED -> {
+                        // Close if paused beyond grace period
+                        val pausedSince = java.time.Duration.between(session.lastActiveAt, now)
+                        if (pausedSince > (session.ttl + pauseGracePeriod).toJavaDuration()) {
+                            logger.info(
+                                "Session '{}' ({}) paused for {} — closing",
+                                session.label, id, pausedSince,
+                            )
+                            session.close()
+                        }
                     }
+                    SandboxSession.SessionState.CLOSED -> Unit
                 }
-                SandboxSession.SessionState.CLOSED -> {
-                    sessions.remove(id)
-                }
+            } catch (e: Exception) {
+                logger.warn("Failed to evict session '{}': {}", id, e.message)
             }
+            if (session.state == SandboxSession.SessionState.CLOSED) sessions.remove(id)
         }
     }
 

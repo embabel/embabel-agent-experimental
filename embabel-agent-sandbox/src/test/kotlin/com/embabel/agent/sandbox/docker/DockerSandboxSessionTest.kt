@@ -25,8 +25,11 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.DisabledOnOs
 import org.junit.jupiter.api.condition.OS
+import java.nio.file.Files
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -86,6 +89,74 @@ class DockerSandboxSessionTest {
         assertIs<ExecutionResult.Completed>(result)
         assertEquals(0, result.exitCode)
         assertContains(result.stdout, "hello world")
+    }
+
+    @Test
+    fun `application stderr that resembles Docker output does not close a live session`() {
+        session = DockerSandboxSession(label = "test", config = config, ttl = 1.hours)
+
+        val result = session!!.execute(
+            ExecutionRequest(
+                command = listOf("sh", "-c", "echo 'Error response from daemon: No such container: nested' >&2; exit 1"),
+                timeout = 10.seconds,
+            ),
+        )
+
+        assertIs<ExecutionResult.Completed>(result)
+        assertEquals(SandboxSession.SessionState.ACTIVE, session!!.state)
+    }
+
+    @Test
+    fun `a container removed outside the manager closes the stale session`() {
+        session = DockerSandboxSession(label = "test", config = config, ttl = 1.hours)
+        val stale = session!!
+        val container = stale.containerId!!
+        assertEquals(0, ProcessBuilder("docker", "rm", "-f", container).start().waitFor())
+
+        val result = stale.execute(
+            ExecutionRequest(
+                command = listOf("echo", "unreachable"),
+                timeout = 10.seconds,
+            ),
+        )
+
+        assertIs<ExecutionResult.Completed>(result)
+        assertFalse(result.success)
+        assertContains(result.stderr, "No such container")
+        assertEquals(SandboxSession.SessionState.CLOSED, stale.state)
+        session = null
+    }
+
+    @Test
+    fun `copying to a container removed outside the manager closes the stale session`() {
+        session = DockerSandboxSession(label = "test", config = config, ttl = 1.hours)
+        val stale = session!!
+        assertEquals(0, ProcessBuilder("docker", "rm", "-f", stale.containerId!!).start().waitFor())
+        val source = Files.createTempFile("sandbox-copy", ".txt")
+
+        try {
+            assertFailsWith<RuntimeException> { stale.copyTo(source, "/world") }
+            assertEquals(SandboxSession.SessionState.CLOSED, stale.state)
+        } finally {
+            Files.deleteIfExists(source)
+            session = null
+        }
+    }
+
+    @Test
+    fun `copying from a container removed outside the manager closes the stale session`() {
+        session = DockerSandboxSession(label = "test", config = config, ttl = 1.hours)
+        val stale = session!!
+        assertEquals(0, ProcessBuilder("docker", "rm", "-f", stale.containerId!!).start().waitFor())
+        val destination = Files.createTempDirectory("sandbox-copy")
+
+        try {
+            assertFailsWith<RuntimeException> { stale.copyFrom("/world/missing", destination) }
+            assertEquals(SandboxSession.SessionState.CLOSED, stale.state)
+        } finally {
+            Files.deleteIfExists(destination)
+            session = null
+        }
     }
 
     @Test

@@ -127,6 +127,19 @@ class DockerSandboxSessionManagerTest {
     }
 
     @Test
+    fun `a stale closed session releases its owner slot`() {
+        val stale = manager.create(label = "s0", config = config, owner = "alice") as DockerSandboxSession
+        manager.create(label = "s1", config = config, owner = "alice")
+        manager.create(label = "s2", config = config, owner = "alice")
+        assertEquals(0, ProcessBuilder("docker", "rm", "-f", stale.containerId!!).start().waitFor())
+        stale.execute(ExecutionRequest(command = listOf("echo", "unreachable"), timeout = 10.seconds))
+
+        val replacement = manager.create(label = "s3", config = config, owner = "alice")
+
+        assertNotNull(replacement)
+    }
+
+    @Test
     fun `enforces max total sessions`() {
         repeat(5) { i ->
             manager.create(label = "s$i", config = config, owner = "user$i")
@@ -161,6 +174,22 @@ class DockerSandboxSessionManagerTest {
         manager.evictExpired()
 
         assertEquals(SandboxSession.SessionState.PAUSED, session.state)
+    }
+
+    @Test
+    fun `eviction removes an idle session whose container disappeared`() {
+        val session = manager.create(
+            label = "stale",
+            config = config,
+            owner = "alice",
+            ttl = 1.milliseconds,
+        ) as DockerSandboxSession
+        assertEquals(0, ProcessBuilder("docker", "rm", "-f", session.containerId!!).start().waitFor())
+        Thread.sleep(50)
+
+        manager.evictExpired()
+
+        assertTrue(manager.list(owner = "alice").isEmpty())
     }
 
     @Test
