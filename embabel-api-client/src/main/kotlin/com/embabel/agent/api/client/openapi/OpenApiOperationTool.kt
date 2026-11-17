@@ -279,7 +279,7 @@ class OpenApiOperationTool(
             val name = match.groupValues[1]
             val value = params[name]
             out.append(
-                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, refuseOffEnum("path", name, value).toString()), StandardCharsets.UTF_8)
+                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, refuseOffEnum("path", name, value.toString()).toString()), StandardCharsets.UTF_8)
                 else UriUtils.encodePath(match.value, StandardCharsets.UTF_8),
             )
             cursor = match.range.last + 1
@@ -316,7 +316,7 @@ class OpenApiOperationTool(
     /**
      * Refuses a path or query value outside the `enum` its parameter declares. A spec that lists
      * the allowed values is stating a limit, and sending another value is a request the spec forbids.
-     * An array value passes when it equals a whole enum entry or when each of its items does; an
+     * A path value is checked as the text it is written into the path as. An array query value passes when it equals a whole enum entry or when each of its items does; an
      * `items.enum` is checked item by item.
      */
     private fun refuseOffEnum(location: String, name: String, value: Any?): Any? {
@@ -355,8 +355,8 @@ class OpenApiOperationTool(
 
     /**
      * Refuses a body that carries a property where its schema says `additionalProperties: false`,
-     * at any depth, or an array where the schema expects an object (or the reverse), since a value
-     * of the wrong shape would otherwise skip the closed schema. Checked on the final body, after
+     * at any depth, or a non-object where such a closed object belongs (or an object where an array
+     * of them belongs), since a value of the wrong shape would otherwise skip the closure. Checked on the final body, after
      * the flat and `body`-wrapper forms are merged, because either form can carry an extra property.
      * Open schemas stay permissive.
      */
@@ -364,25 +364,16 @@ class OpenApiOperationTool(
         bodyViolation(schema, value, at)?.let { throw IllegalArgumentException("$it; the request was not sent") }
     }
 
-    /**
-     * How [value] breaks a closed schema under [schema], or null when it breaks none. Compositions
-     * follow JSON Schema: each `allOf` branch judges the value on its own, so a closed branch refuses
-     * a property only another branch declares; a `oneOf` or `anyOf` passes when any branch does.
-     */
-    // shortcut: the fully-resolved parse (`OpenApiLearner.parseSpec`) merges allOf branches and drops their additionalProperties, so a closed allOf branch is enforced only on the ref-preserving parse; parse without combinator resolution if parseSpec callers need it.
+    /** How [value] breaks a closed schema under [schema], or null when it breaks none. */
+    // shortcut: closure is enforced on direct object schemas; composed schemas are not validated, so a closed body must not use allOf/oneOf/anyOf.
     private fun bodyViolation(schema: Schema<*>?, value: Any?, at: String): String? {
         val resolved = schema?.deref(componentsSchemas) ?: return null
         if (value == null) return null
-        resolved.allOf?.firstNotNullOfOrNull { bodyViolation(it, value, at) }?.let { return it }
-        for (branches in listOfNotNull(resolved.oneOf, resolved.anyOf).filter { it.isNotEmpty() }) {
-            val violations = branches.map { bodyViolation(it, value, at) }
-            if (null !in violations) return violations.first()
-        }
+        if (listOfNotNull(resolved.allOf, resolved.oneOf, resolved.anyOf).any { it.isNotEmpty() }) return null
         val what = if (at.isEmpty()) "Request body" else "Request body property '$at'"
-        val isArray = resolved.type == "array" || resolved.items != null
-        val isObject = resolved.type == "object" || resolved.properties != null || resolved.additionalProperties != null
+        val closed = resolved.additionalProperties == false
         return when (value) {
-            is Map<*, *> -> if (isArray && !isObject) {
+            is Map<*, *> -> if (resolved.items?.deref(componentsSchemas)?.additionalProperties == false) {
                 "$what is an object where the operation's schema expects an array"
             } else {
                 value.entries.firstNotNullOfOrNull { (key, child) ->
@@ -396,12 +387,11 @@ class OpenApiOperationTool(
                     }
                 }
             }
-            is Collection<*> -> if (isObject && !isArray) {
-                "$what is an array where the operation's schema expects an object"
+            else -> if (closed) {
+                "$what is not an object where the operation's schema expects a closed object"
             } else {
-                value.withIndex().firstNotNullOfOrNull { (i, item) -> bodyViolation(resolved.items, item, "$at[$i]") }
+                (value as? Collection<*>)?.withIndex()?.firstNotNullOfOrNull { (i, item) -> bodyViolation(resolved.items, item, "$at[$i]") }
             }
-            else -> null
         }
     }
 
@@ -638,12 +628,8 @@ class OpenApiOperationTool(
     // `application/x-www-form-urlencoded` AND not `application/json`.
     // Conservative on purpose — JSON wins when a spec lists both, so
     // every existing pack keeps its current wire format.
-    private fun preferFormUrlEncoded(): Boolean {
-        val content = operation.requestBody?.content ?: return false
-        val keys = content.keys
-        if (keys.any { it.equals(MediaType.APPLICATION_JSON_VALUE, ignoreCase = true) }) return false
-        return keys.any { it.equals(MediaType.APPLICATION_FORM_URLENCODED_VALUE, ignoreCase = true) }
-    }
+    private fun preferFormUrlEncoded(): Boolean =
+        operation.requestBodyMediaType().equals(MediaType.APPLICATION_FORM_URLENCODED_VALUE, ignoreCase = true)
 
     // Flatten an arbitrary body graph into a `MultiValueMap<String,String>`
     // using Stripe / Rails bracket syntax: `metadata[key]=v`, `items[0][price]=p`.
@@ -1069,13 +1055,16 @@ class OpenApiOperationTool(
 }
 
 /**
- * The request body's schema for the content type the body is sent as: JSON when the operation
- * declares it, else the first listed (see `preferFormUrlEncoded`).
+ * The content type the request body is sent as: JSON when the operation declares it, else form
+ * encoding when declared, else the first listed. Its schema is the one the body is built and checked against.
  */
-internal fun Operation.requestBodyMediaSchema(): Schema<*>? = requestBody?.content?.let { content ->
-    (content.entries.firstOrNull { it.key.equals(MediaType.APPLICATION_JSON_VALUE, ignoreCase = true) }?.value
-        ?: content.values.firstOrNull())?.schema
+internal fun Operation.requestBodyMediaType(): String? = requestBody?.content?.keys?.let { keys ->
+    listOf(MediaType.APPLICATION_JSON_VALUE, MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+        .firstNotNullOfOrNull { type -> keys.firstOrNull { it.equals(type, ignoreCase = true) } }
+        ?: keys.firstOrNull()
 }
+
+internal fun Operation.requestBodyMediaSchema(): Schema<*>? = requestBodyMediaType()?.let { requestBody.content[it]?.schema }
 
 /**
  * Follow a chain of `$ref`s against [componentsSchemas] to the schema it

@@ -33,9 +33,10 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The argument checks of [OpenApiArgumentValidationTest] hold however the spec is shaped: through
- * a chain of `$ref`s, inside `allOf`/`oneOf`/`anyOf`, behind a JSON body listed after another
- * content type, and for a parameter that is itself a `$ref`. A value of the wrong shape cannot
+ * a chain of `$ref`s, behind a JSON body listed after another content type or a form body listed
+ * after a non-form one, and for a parameter that is itself a `$ref`. A value of the wrong shape cannot
  * slip past a closed schema, and an enum is matched by value, so a valid call is not refused.
+ * Bodies under `allOf`/`oneOf`/`anyOf` are sent unvalidated.
  * Every case runs on both the fully-resolved parse and the ref-preserving one.
  */
 class OpenApiArgumentShapeValidationTest {
@@ -112,24 +113,43 @@ class OpenApiArgumentShapeValidationTest {
 
     @ParameterizedTest
     @ValueSource(booleans = [true, false])
-    fun `every closed branch of an allOf rejects what it does not declare`(preserveRefs: Boolean) {
-        // The fully-resolved parse merges allOf branches and drops their additionalProperties, so
-        // there is no closed branch left to enforce; see the shortcut on bodyViolation.
-        if (preserveRefs) {
-            assertRefused(call(preserveRefs, "allOf", """{"body":{"amount":"5","secret":"x"}}"""), "secret")
-            assertRefused(call(preserveRefs, "allOf", """{"body":{"name":"n"}}"""), "name")
+    fun `a composed body is sent unvalidated`(preserveRefs: Boolean) {
+        for (op in listOf("allOf", "oneOf", "anyOf")) {
+            assertSent(call(preserveRefs, op, """{"body":{"amount":"5","secret":"x"}}"""))
+            assertSent(call(preserveRefs, op, """{"body":{"secret":"x"}}"""))
         }
-        assertSent(call(preserveRefs, "allOf", """{"body":{"amount":"5"}}"""))
+        // A wrong-shaped branch no longer excuses or blocks anything: the union is not walked.
+        assertSent(call(preserveRefs, "oneOfClosedChildren", """{"body":{"payload":{"secret":"x"}}}"""))
     }
 
     @ParameterizedTest
     @ValueSource(booleans = [true, false])
-    fun `a oneOf or anyOf passes when one branch accepts the value`(preserveRefs: Boolean) {
-        for (op in listOf("oneOf", "anyOf")) {
-            assertSent(call(preserveRefs, op, """{"body":{"amount":"5"}}"""))
-            assertSent(call(preserveRefs, op, """{"body":{"name":"n"}}"""))
-            assertRefused(call(preserveRefs, op, """{"body":{"secret":"x"}}"""), "secret")
-        }
+    fun `a self-referencing allOf is sent without recursing`(preserveRefs: Boolean) {
+        assertSent(call(preserveRefs, "loop", """{"payload":{"amount":"5"}}"""))
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `a scalar path enum refuses an array that would be written into the path`(preserveRefs: Boolean) {
+        assertRefused(call(preserveRefs, "sharedParameter", """{"scope":["notes"]}"""), "Path parameter 'scope'")
+        assertRefused(call(preserveRefs, "sharedParameter", """{"scope":[null]}"""), "Path parameter 'scope'")
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `the form schema is checked when the form body is listed after another content type`(preserveRefs: Boolean) {
+        assertRefused(call(preserveRefs, "formAfterText", """{"body":{"secret":"x"}}"""), "secret")
+        assertSent(call(preserveRefs, "formAfterText", """{"amount":"5"}"""))
+        assertTrue(received.single().endsWith(" amount=5"), received.toString())
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `only a closed object refuses a value of another shape`(preserveRefs: Boolean) {
+        assertSent(call(preserveRefs, "openShapes", """{"explicitOpen":["a"],"keywordOpen":["a"]}"""))
+        // Closure without `type` is still closure: the array is refused rather than let past it.
+        assertRefused(call(preserveRefs, "openShapes", """{"keywordClosed":["a"]}"""), "keywordClosed")
+        assertRefused(call(preserveRefs, "chained", """{"properties":"secret=x"}"""), "properties")
     }
 
     @ParameterizedTest
@@ -201,6 +221,17 @@ class OpenApiArgumentShapeValidationTest {
             ${op("/mixed", "mixedContent", """"requestBody": { "content": {
                 "text/plain": { "schema": { "type": "string" } },
                 "application/json": { "schema": ${ref("Root")} } } },""")},
+            ${op("/one-of-closed-children", "oneOfClosedChildren", jsonBody("""{ "oneOf": [
+                { "type": "object", "additionalProperties": false, "properties": { "payload": ${ref("Closed")} } },
+                { "type": "object", "additionalProperties": false, "properties": { "payload": { "type": "string" } } }] }"""))},
+            ${op("/loop", "loop", jsonBody("""{ "type": "object", "properties": { "payload": ${ref("Loop")} } }"""))},
+            ${op("/form", "formAfterText", """"requestBody": { "content": {
+                "text/plain": { "schema": { "type": "string" } },
+                "application/x-www-form-urlencoded": { "schema": ${ref("Closed")} } } },""")},
+            ${op("/open-shapes", "openShapes", jsonBody("""{ "type": "object", "properties": {
+                "explicitOpen": { "type": "object", "additionalProperties": true },
+                "keywordOpen": { "properties": { "amount": { "type": "string" } } },
+                "keywordClosed": { "properties": { "amount": { "type": "string" } }, "additionalProperties": false } } }"""))},
             "/scoped/{scope}": { "get": { "operationId": "sharedParameter",
               "parameters": [{ "${'$'}ref": "#/components/parameters/Scope" }],
               "responses": { "200": { "description": "ok" } } } }
@@ -221,6 +252,7 @@ class OpenApiArgumentShapeValidationTest {
               "Alias": ${ref("NullableClosed")},
               "NullableClosed": { "type": "object", "nullable": true, "additionalProperties": false, "properties": { "amount": { "type": "string" } } },
               "Closed": { "type": "object", "additionalProperties": false, "properties": { "amount": { "type": "string" } } },
+              "Loop": { "allOf": [${ref("Loop")}, ${ref("Closed")}] },
               "ClosedName": { "type": "object", "additionalProperties": false, "properties": { "name": { "type": "string" } } },
               "AliasEnum": ${ref("Enum")},
               "Enum": { "type": "string", "enum": ["a", "b"] }
