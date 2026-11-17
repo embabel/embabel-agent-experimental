@@ -184,8 +184,21 @@ class CredentialSafeRedirects(
             connectTimeout: Duration?,
             readTimeout: Duration?,
             credentialQueryParameters: Set<String>,
+        ): ClientHttpRequestFactory = overJdkClient(connectTimeout, readTimeout, credentialQueryParameters, null)
+
+        /**
+         * As [overJdkClient], trusting [trustedCertificates] in place of the JVM's own authorities:
+         * for an API signed by an authority no public trust store carries, such as a Kubernetes
+         * cluster's. PEM, PEM with `\n` for its line breaks, or Base64 of PEM or DER. Only this
+         * factory's calls trust them. Null or blank is the JVM's own trust.
+         */
+        fun overJdkClient(
+            connectTimeout: Duration?,
+            readTimeout: Duration?,
+            credentialQueryParameters: Set<String>,
+            trustedCertificates: String?,
         ): ClientHttpRequestFactory =
-            overClient(SharedHttpClients.redirectRefusing(connectTimeout), readTimeout, credentialQueryParameters)
+            overClient(SharedHttpClients.redirectRefusing(connectTimeout, trustedCertificates), readTimeout, credentialQueryParameters)
 
         /**
          * As [overJdkClient], over a [client] the caller owns and closes with its own lifecycle.
