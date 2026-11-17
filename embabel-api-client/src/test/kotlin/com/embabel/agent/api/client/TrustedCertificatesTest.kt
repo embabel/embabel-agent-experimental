@@ -16,6 +16,8 @@
 package com.embabel.agent.api.client
 
 import com.embabel.agent.api.client.openapi.OpenApiClientProperties
+import com.embabel.agent.api.tool.Tool
+import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.sun.net.httpserver.HttpsConfigurator
 import com.sun.net.httpserver.HttpsServer
 import org.junit.jupiter.api.AfterEach
@@ -125,6 +127,25 @@ class TrustedCertificatesTest {
         val properties = OpenApiClientProperties(trustedCertificates = pem)
         assertEquals(pem, properties.trustedCertificates)
         assertEquals(null, OpenApiClientProperties().trustedCertificates)
+    }
+
+    @Test
+    fun `tools rebuilt from a kept spec trust the authority too`() {
+        val spec = LearnedApiSpec.OpenApi(
+            source = "inline",
+            rawSpec = """{"openapi":"3.0.3","info":{"title":"cluster","version":"1"},
+                "servers":[{"url":"https://127.0.0.1:${server.address.port}"}],
+                "paths":{"/pods":{"get":{"operationId":"listPods","responses":{"200":{"description":"ok"}}}}}}""",
+        )
+        val trusting = leafTools(spec.toFactory(clientProperties = OpenApiClientProperties(trustedCertificates = pem))(ApiCredentials.None)).single()
+        assertTrue(trusting.call("").toString().contains("items"), "the call reached the server")
+        val unaware = leafTools(spec.toFactory()(ApiCredentials.None)).single()
+        assertTrue(!unaware.call("").toString().contains("\"items\""), "the default client is refused")
+    }
+
+    private fun leafTools(tool: Tool): List<Tool> = when (tool) {
+        is ProgressiveTool -> tool.innerTools(org.mockito.Mockito.mock(com.embabel.agent.core.AgentProcess::class.java)).flatMap(::leafTools)
+        else -> listOf(tool)
     }
 
     /* The JDK's keytool, so the test needs no certificate library and keeps no key. Returns what it printed. */
