@@ -140,6 +140,7 @@ class OpenApiOperationTool(
             val queryParams = resolveQueryParams(params)
             val headerParams = resolveHeaderParams(params)
             val body = resolveBody(params)
+            refuseUndeclaredBodyProperties(requestBodySchema(), body, "")
 
             val uri = buildUri(resolvedPath, queryParams)
             uriForLog = uri.toString()
@@ -278,7 +279,7 @@ class OpenApiOperationTool(
             val name = match.groupValues[1]
             val value = params[name]
             out.append(
-                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, value.toString()), StandardCharsets.UTF_8)
+                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, refuseOffEnum("path", name, value.toString())), StandardCharsets.UTF_8)
                 else UriUtils.encodePath(match.value, StandardCharsets.UTF_8),
             )
             cursor = match.range.last + 1
@@ -310,6 +311,50 @@ class OpenApiOperationTool(
             decoded = runCatching { UriUtils.decode(decoded, StandardCharsets.UTF_8) }.getOrNull()
         }
         return value
+    }
+
+    /**
+     * Refuses a path or query value outside the `enum` its parameter declares. A spec that lists
+     * the allowed values is stating a limit, and sending another value is a request the spec forbids.
+     */
+    private fun refuseOffEnum(location: String, name: String, value: String): String {
+        val schema = operation.parameters?.firstOrNull { it.`in` == location && it.name == name }
+            ?.schema?.deref(componentsSchemas) ?: return value
+        val allowed = (schema.enum ?: schema.items?.deref(componentsSchemas)?.enum)
+            ?.map { it.toString() }?.takeIf { it.isNotEmpty() } ?: return value
+        if (value !in allowed) {
+            throw IllegalArgumentException(
+                "${location.replaceFirstChar { it.uppercase() }} parameter '$name' is '$value', which is not one of $allowed; the request was not sent",
+            )
+        }
+        return value
+    }
+
+    private fun requestBodySchema(): Schema<*>? =
+        operation.requestBody?.content?.values?.firstOrNull()?.schema?.deref(componentsSchemas)
+
+    /**
+     * Refuses a body that carries a property where its schema says `additionalProperties: false`,
+     * at any depth. Checked on the final body, after the flat and `body`-wrapper forms are merged,
+     * because either form can carry an extra property. Open schemas stay permissive.
+     */
+    // shortcut: allOf/oneOf/anyOf are not walked, so a closed schema inside a composition is not enforced; walk them when a spec closes one.
+    private fun refuseUndeclaredBodyProperties(schema: Schema<*>?, value: Any?, at: String) {
+        val resolved = schema?.deref(componentsSchemas) ?: return
+        when (value) {
+            is Map<*, *> -> value.forEach { (key, child) ->
+                val name = if (at.isEmpty()) "$key" else "$at.$key"
+                val declared = resolved.properties?.get(key.toString())
+                when {
+                    declared != null -> refuseUndeclaredBodyProperties(declared, child, name)
+                    resolved.additionalProperties == false -> throw IllegalArgumentException(
+                        "Request body property '$name' is not declared by the operation's schema, which allows no other properties; the request was not sent",
+                    )
+                    else -> refuseUndeclaredBodyProperties(resolved.additionalProperties as? Schema<*>, child, name)
+                }
+            }
+            is Collection<*> -> value.forEachIndexed { i, item -> refuseUndeclaredBodyProperties(resolved.items, item, "$at[$i]") }
+        }
     }
 
     /**
@@ -362,7 +407,7 @@ class OpenApiOperationTool(
                 when (val v = entry.value) {
                     is Collection<*> -> v.mapNotNull { it?.toString() }
                     else -> listOf(v.toString())
-                }
+                }.onEach { refuseOffEnum("query", entry.key, it) }
             }
     }
 
