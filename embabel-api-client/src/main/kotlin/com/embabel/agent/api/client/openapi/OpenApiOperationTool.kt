@@ -19,6 +19,7 @@ import com.embabel.agent.api.client.ApiCall
 import com.embabel.agent.api.client.ApiCallError
 import com.embabel.agent.api.client.ApiCallInterceptor
 import com.embabel.agent.api.tool.Tool
+import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import io.swagger.v3.oas.models.Operation
@@ -252,8 +253,7 @@ class OpenApiOperationTool(
     /** Every name the operation declares — path, query, header, and request-body properties. */
     private fun declaredParameterNames(): Set<String> {
         val declared = (operation.parameters ?: emptyList()).map { it.name }.toSet()
-        val bodyProps = operation.requestBody?.content?.values?.firstOrNull()?.schema
-            ?.deref(componentsSchemas)?.properties?.keys.orEmpty()
+        val bodyProps = requestBodySchema()?.properties?.keys.orEmpty()
         return declared + bodyProps
     }
 
@@ -279,7 +279,7 @@ class OpenApiOperationTool(
             val name = match.groupValues[1]
             val value = params[name]
             out.append(
-                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, refuseOffEnum("path", name, value.toString())), StandardCharsets.UTF_8)
+                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, refuseOffEnum("path", name, value).toString()), StandardCharsets.UTF_8)
                 else UriUtils.encodePath(match.value, StandardCharsets.UTF_8),
             )
             cursor = match.range.last + 1
@@ -316,44 +316,92 @@ class OpenApiOperationTool(
     /**
      * Refuses a path or query value outside the `enum` its parameter declares. A spec that lists
      * the allowed values is stating a limit, and sending another value is a request the spec forbids.
+     * An array value passes when it equals a whole enum entry or when each of its items does; an
+     * `items.enum` is checked item by item.
      */
-    private fun refuseOffEnum(location: String, name: String, value: String): String {
+    private fun refuseOffEnum(location: String, name: String, value: Any?): Any? {
+        if (value == null) return null
         val schema = operation.parameters?.firstOrNull { it.`in` == location && it.name == name }
             ?.schema?.deref(componentsSchemas) ?: return value
-        val allowed = (schema.enum ?: schema.items?.deref(componentsSchemas)?.enum)
-            ?.map { it.toString() }?.takeIf { it.isNotEmpty() } ?: return value
-        if (value !in allowed) {
+        val enum = schema.enum?.takeIf { it.isNotEmpty() }
+        val itemEnum = schema.items?.deref(componentsSchemas)?.enum?.takeIf { it.isNotEmpty() }
+        val items = (value as? Collection<*>)?.filterNotNull() ?: listOf(value)
+        val allowed = (enum == null || enum.any { enumMatches(it, value) } || items.all { v -> enum.any { enumMatches(it, v) } }) &&
+            (itemEnum == null || items.all { v -> itemEnum.any { enumMatches(it, v) } })
+        if (!allowed) {
             throw IllegalArgumentException(
-                "${location.replaceFirstChar { it.uppercase() }} parameter '$name' is '$value', which is not one of $allowed; the request was not sent",
+                "${location.replaceFirstChar { it.uppercase() }} parameter '$name' is '$value', which is not one of ${enum ?: itemEnum}; the request was not sent",
             )
         }
         return value
     }
 
-    private fun requestBodySchema(): Schema<*>? =
-        operation.requestBody?.content?.values?.firstOrNull()?.schema?.deref(componentsSchemas)
+    /** Compares by value: a null entry matches nothing, numbers numerically, arrays element by element. */
+    private fun enumMatches(candidate: Any?, value: Any?): Boolean {
+        val entry = if (candidate is JsonNode) objectMapper.treeToValue(candidate, Any::class.java) else candidate
+        return when {
+            entry == null || value == null -> false
+            entry is Collection<*> -> value is Collection<*> && entry.size == value.size &&
+                entry.zip(value).all { (e, v) -> enumMatches(e, v) }
+            value is Collection<*> -> false
+            entry is Number -> entry.toString().toBigDecimalOrNull()
+                ?.let { e -> value.toString().toBigDecimalOrNull()?.compareTo(e) == 0 }
+                ?: (entry.toString() == value.toString())
+            else -> entry.toString() == value.toString()
+        }
+    }
+
+    private fun requestBodySchema(): Schema<*>? = operation.requestBodyMediaSchema()?.deref(componentsSchemas)
 
     /**
      * Refuses a body that carries a property where its schema says `additionalProperties: false`,
-     * at any depth. Checked on the final body, after the flat and `body`-wrapper forms are merged,
-     * because either form can carry an extra property. Open schemas stay permissive.
+     * at any depth, or an array where the schema expects an object (or the reverse), since a value
+     * of the wrong shape would otherwise skip the closed schema. Checked on the final body, after
+     * the flat and `body`-wrapper forms are merged, because either form can carry an extra property.
+     * Open schemas stay permissive.
      */
-    // shortcut: allOf/oneOf/anyOf are not walked, so a closed schema inside a composition is not enforced; walk them when a spec closes one.
     private fun refuseUndeclaredBodyProperties(schema: Schema<*>?, value: Any?, at: String) {
-        val resolved = schema?.deref(componentsSchemas) ?: return
-        when (value) {
-            is Map<*, *> -> value.forEach { (key, child) ->
-                val name = if (at.isEmpty()) "$key" else "$at.$key"
-                val declared = resolved.properties?.get(key.toString())
-                when {
-                    declared != null -> refuseUndeclaredBodyProperties(declared, child, name)
-                    resolved.additionalProperties == false -> throw IllegalArgumentException(
-                        "Request body property '$name' is not declared by the operation's schema, which allows no other properties; the request was not sent",
-                    )
-                    else -> refuseUndeclaredBodyProperties(resolved.additionalProperties as? Schema<*>, child, name)
+        bodyViolation(schema, value, at)?.let { throw IllegalArgumentException("$it; the request was not sent") }
+    }
+
+    /**
+     * How [value] breaks a closed schema under [schema], or null when it breaks none. Compositions
+     * follow JSON Schema: each `allOf` branch judges the value on its own, so a closed branch refuses
+     * a property only another branch declares; a `oneOf` or `anyOf` passes when any branch does.
+     */
+    // shortcut: the fully-resolved parse (`OpenApiLearner.parseSpec`) merges allOf branches and drops their additionalProperties, so a closed allOf branch is enforced only on the ref-preserving parse; parse without combinator resolution if parseSpec callers need it.
+    private fun bodyViolation(schema: Schema<*>?, value: Any?, at: String): String? {
+        val resolved = schema?.deref(componentsSchemas) ?: return null
+        if (value == null) return null
+        resolved.allOf?.firstNotNullOfOrNull { bodyViolation(it, value, at) }?.let { return it }
+        for (branches in listOfNotNull(resolved.oneOf, resolved.anyOf).filter { it.isNotEmpty() }) {
+            val violations = branches.map { bodyViolation(it, value, at) }
+            if (null !in violations) return violations.first()
+        }
+        val what = if (at.isEmpty()) "Request body" else "Request body property '$at'"
+        val isArray = resolved.type == "array" || resolved.items != null
+        val isObject = resolved.type == "object" || resolved.properties != null || resolved.additionalProperties != null
+        return when (value) {
+            is Map<*, *> -> if (isArray && !isObject) {
+                "$what is an object where the operation's schema expects an array"
+            } else {
+                value.entries.firstNotNullOfOrNull { (key, child) ->
+                    val name = if (at.isEmpty()) "$key" else "$at.$key"
+                    val declared = resolved.properties?.get(key.toString())
+                    when {
+                        declared != null -> bodyViolation(declared, child, name)
+                        resolved.additionalProperties == false ->
+                            "Request body property '$name' is not declared by the operation's schema, which allows no other properties"
+                        else -> bodyViolation(resolved.additionalProperties as? Schema<*>, child, name)
+                    }
                 }
             }
-            is Collection<*> -> value.forEachIndexed { i, item -> refuseUndeclaredBodyProperties(resolved.items, item, "$at[$i]") }
+            is Collection<*> -> if (isObject && !isArray) {
+                "$what is an array where the operation's schema expects an object"
+            } else {
+                value.withIndex().firstNotNullOfOrNull { (i, item) -> bodyViolation(resolved.items, item, "$at[$i]") }
+            }
+            else -> null
         }
     }
 
@@ -391,9 +439,7 @@ class OpenApiOperationTool(
             // before reading `.properties` to recover the target type's
             // declared body fields. Without this the request would forward
             // those fields as query params, which most APIs reject.
-            operation.requestBody?.content?.values?.firstOrNull()?.schema
-                ?.deref(componentsSchemas)
-                ?.properties?.keys?.toSet().orEmpty()
+            requestBodySchema()?.properties?.keys?.toSet().orEmpty()
         }
 
         return params
@@ -404,10 +450,10 @@ class OpenApiOperationTool(
             }
             .filter { it.value != null }
             .mapValues { entry ->
-                when (val v = entry.value) {
+                when (val v = refuseOffEnum("query", entry.key, entry.value)) {
                     is Collection<*> -> v.mapNotNull { it?.toString() }
                     else -> listOf(v.toString())
-                }.onEach { refuseOffEnum("query", entry.key, it) }
+                }
             }
     }
 
@@ -479,9 +525,7 @@ class OpenApiOperationTool(
     private fun resolveBody(params: Map<String, Any?>): Any? {
         // Same deref reasoning as `resolveQueryParams`: the body schema
         // may arrive as a bare ref under the ref-preserving parse.
-        val bodySchema = operation.requestBody?.content?.values?.firstOrNull()?.schema
-            ?.deref(componentsSchemas)
-            ?: return null
+        val bodySchema = requestBodySchema() ?: return null
 
         val bodyProps = bodySchema.properties?.keys?.toSet().orEmpty()
         val isObjectBody = (bodySchema.type == "object" || bodyProps.isNotEmpty())
@@ -892,7 +936,7 @@ class OpenApiOperationTool(
             // Body schema may itself be a $ref node when the spec was
             // parsed via `parseSpecPreservingRefs`; deref so the property
             // expansion below still finds the referenced shape's fields.
-            operation.requestBody?.content?.values?.firstOrNull()?.schema?.let { rawSchema ->
+            operation.requestBodyMediaSchema()?.let { rawSchema ->
                 val schema = rawSchema.deref(componentsSchemas)
                 val bodyRequiredOverall = operation.requestBody?.required ?: false
                 @Suppress("UNCHECKED_CAST")
@@ -1025,9 +1069,18 @@ class OpenApiOperationTool(
 }
 
 /**
- * Follow a single level of `$ref` against [componentsSchemas]. Returns
- * [this] if there's no `$ref` or the referenced name isn't in the
- * registry. Used wherever the runtime walks properties or types and
+ * The request body's schema for the content type the body is sent as: JSON when the operation
+ * declares it, else the first listed (see `preferFormUrlEncoded`).
+ */
+internal fun Operation.requestBodyMediaSchema(): Schema<*>? = requestBody?.content?.let { content ->
+    (content.entries.firstOrNull { it.key.equals(MediaType.APPLICATION_JSON_VALUE, ignoreCase = true) }?.value
+        ?: content.values.firstOrNull())?.schema
+}
+
+/**
+ * Follow a chain of `$ref`s against [componentsSchemas] to the schema it
+ * names. Returns the last schema reached if a `$ref` is missing from the
+ * registry or the chain loops back on itself. Used wherever the runtime walks properties or types and
  * expects a populated schema, not a bare reference (e.g. building the
  * request body, mapping property types into [Tool.Parameter]s).
  *
@@ -1037,9 +1090,13 @@ class OpenApiOperationTool(
 internal fun Schema<*>.deref(
     componentsSchemas: Map<String, Schema<*>>,
 ): Schema<*> {
-    val ref = this.`$ref` ?: return this
-    val name = extractRefName(ref) ?: return this
-    return componentsSchemas[name] ?: this
+    var schema = this
+    val seen = mutableSetOf<String>()
+    while (true) {
+        val name = schema.`$ref`?.let(::extractRefName) ?: return schema
+        if (!seen.add(name)) return schema
+        schema = componentsSchemas[name] ?: return schema
+    }
 }
 
 internal fun extractRefName(ref: String): String? {
