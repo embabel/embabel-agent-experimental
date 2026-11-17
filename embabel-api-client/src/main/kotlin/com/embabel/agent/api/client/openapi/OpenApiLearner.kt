@@ -296,6 +296,7 @@ class OpenApiLearner(
                 connectTimeout = clientProperties.connectTimeout,
                 readTimeout = clientProperties.readTimeout,
                 credentialQueryParameters = queryCredentialNames(openApi, credentials),
+                trustedCertificates = clientProperties.trustedCertificates,
             )
             val builder = RestClient.builder().requestFactory(requestFactory)
             applyCredentials(builder, openApi, credentials)

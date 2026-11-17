@@ -28,9 +28,17 @@ import java.time.Duration
  *       connect-timeout: 5s
  *       read-timeout: 20s
  * ```
+ *
+ * [trustedCertificates] is for an API signed by an authority the JVM does not trust, such as a
+ * Kubernetes cluster's own: one or more certificates as PEM, PEM with `\n` for its line breaks, or
+ * Base64 of PEM or DER (a kubeconfig's `certificate-authority-data`). The tools built with these
+ * properties trust those certificates IN PLACE OF the JVM's authorities, and nothing else does.
+ * It is set per API by the code that builds its tools rather than once in configuration, since
+ * it belongs to one API.
  */
 @ConfigurationProperties(prefix = "embabel.api-client.openapi")
-data class OpenApiClientProperties(
+data class OpenApiClientProperties @JvmOverloads constructor(
     val connectTimeout: Duration = Duration.ofSeconds(5),
     val readTimeout: Duration = Duration.ofSeconds(20),
+    val trustedCertificates: String? = null,
 )

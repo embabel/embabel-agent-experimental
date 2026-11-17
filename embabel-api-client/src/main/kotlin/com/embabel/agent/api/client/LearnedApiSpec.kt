@@ -17,6 +17,7 @@ package com.embabel.agent.api.client
 
 import com.embabel.agent.api.client.graphql.GraphQlLearner
 import com.embabel.agent.api.client.model.ApiModel
+import com.embabel.agent.api.client.openapi.OpenApiClientProperties
 import com.embabel.agent.api.client.openapi.OpenApiLearner
 import com.embabel.agent.api.tool.progressive.ProgressiveTool
 import com.fasterxml.jackson.annotation.JsonTypeInfo
@@ -55,12 +56,16 @@ sealed interface LearnedApiSpec {
      * @param serverVariables values for the `{name}` variables in an OpenAPI
      *   spec's `servers` URLs, overriding their defaults. Ignored by spec types
      *   whose endpoint is not templated.
+     * @param clientProperties how the tools' HTTP client is built: its timeouts, and the
+     *   certificate authorities it trusts when the API is signed by one the JVM does not.
+     *   Ignored by spec types that build their client another way.
      */
     fun toFactory(
         tags: Set<String>? = null,
         operationIds: Set<String>? = null,
         nameOverride: String? = null,
         serverVariables: Map<String, String> = emptyMap(),
+        clientProperties: OpenApiClientProperties = OpenApiClientProperties(),
     ): (ApiCredentials) -> ProgressiveTool
 
     /**
@@ -86,6 +91,7 @@ sealed interface LearnedApiSpec {
             operationIds: Set<String>?,
             nameOverride: String?,
             serverVariables: Map<String, String>,
+            clientProperties: OpenApiClientProperties,
         ): (ApiCredentials) -> ProgressiveTool = { credentials ->
             // Use the ref-preserving parse so each `OpenApiOperationTool`
             // can emit `{"$ref": "#/$defs/Foo"}` markers in its output
@@ -95,6 +101,7 @@ sealed interface LearnedApiSpec {
             val openApi = OpenApiLearner.parseSpecPreservingRefs(source, rawSpec)
             OpenApiLearner.buildTool(
                 source, openApi, credentials, tags, operationIds, nameOverride,
+                clientProperties = clientProperties,
                 serverVariables = serverVariables,
             )
         }
@@ -128,6 +135,7 @@ sealed interface LearnedApiSpec {
             operationIds: Set<String>?,
             nameOverride: String?,
             serverVariables: Map<String, String>,
+            clientProperties: OpenApiClientProperties,
         ): (ApiCredentials) -> ProgressiveTool = { credentials ->
             // GraphQL doesn't have OpenAPI tags or operationIds —
             // ignored. Filtering by GraphQL field name is a separate
