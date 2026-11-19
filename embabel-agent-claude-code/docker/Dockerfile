@@ -37,6 +37,10 @@ RUN curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public | gp
         > /etc/apt/sources.list.d/adoptium.list && \
     apt-get update && \
     apt-get install -yy --no-install-recommends temurin-21-jdk && \
+    # CVE-2026-114938 ("Java4Shell") is fixed in 21.0.13.1. It is x86-64 only, and Adoptium ships the
+    # fixed build for amd64 only, so the build fails if an amd64 image would carry an older JDK.
+    { [ "$(dpkg --print-architecture)" != amd64 ] || \
+      dpkg --compare-versions "$(dpkg-query -W -f='${Version}' temurin-21-jdk)" ge 21.0.13.1; } && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
