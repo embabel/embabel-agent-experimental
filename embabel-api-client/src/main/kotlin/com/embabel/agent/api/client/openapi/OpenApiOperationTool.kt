@@ -278,13 +278,34 @@ class OpenApiOperationTool(
             val name = match.groupValues[1]
             val value = params[name]
             out.append(
-                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, value.toString()), StandardCharsets.UTF_8)
+                if (value != null) UriUtils.encodePathSegment(refuseDotSegment(name, pathText(name, value)), StandardCharsets.UTF_8)
                 else UriUtils.encodePath(match.value, StandardCharsets.UTF_8),
             )
             cursor = match.range.last + 1
         }
         out.append(UriUtils.encodePath(path.substring(cursor), StandardCharsets.UTF_8))
         return out.toString()
+    }
+
+    /*
+     * One path placeholder holds one value. A list used to reach here as its `toString()`, so a
+     * caller that binds a list-shaped argument to a path parameter sent `GET /plans/[plan_std]`
+     * (or, batched, `/plans/[a, b, c]`) and read the server's 404 as "no such plan" for every key.
+     * A list of exactly one is that one value, which is what such a caller meant; a list of more
+     * cannot be one segment, and is refused unsent rather than guessed at.
+     */
+    private fun pathText(name: String, value: Any): String {
+        val items = when (value) {
+            is Collection<*> -> value.toList()
+            is Array<*> -> value.toList()
+            else -> return value.toString()
+        }
+        val only = items.singleOrNull()
+            ?: throw IllegalArgumentException(
+                "Path parameter '$name' was given ${items.size} values, and a path segment holds one; the request was not sent",
+            )
+        return only?.toString()
+            ?: throw IllegalArgumentException("Path parameter '$name' was given a null value; the request was not sent")
     }
 
     /*
