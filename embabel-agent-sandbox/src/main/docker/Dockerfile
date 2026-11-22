@@ -36,6 +36,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Java (headless JRE)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     default-jre-headless \
+    # CVE-2026-114938 ("Java4Shell") is fixed in 21.0.13.1: fail the build on an older JRE.
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' openjdk-21-jre-headless)" ge 21.0.13.1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Perl
