@@ -23,6 +23,7 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.sun.net.httpserver.HttpServer
 import io.swagger.v3.oas.models.OpenAPI
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.params.ParameterizedTest
@@ -130,8 +131,10 @@ class OpenApiArgumentShapeValidationTest {
 
     @ParameterizedTest
     @ValueSource(booleans = [true, false])
-    fun `a scalar path enum refuses an array that would be written into the path`(preserveRefs: Boolean) {
-        assertRefused(call(preserveRefs, "sharedParameter", """{"scope":["notes"]}"""), "Path parameter 'scope'")
+    fun `a scalar path enum sends a list of one as its value and refuses a list holding null`(preserveRefs: Boolean) {
+        // A list of one is sent as that value (#60).
+        assertSent(call(preserveRefs, "sharedParameter", """{"scope":["notes"]}"""))
+        assertEquals(listOf("GET /scoped/notes"), received)
         assertRefused(call(preserveRefs, "sharedParameter", """{"scope":[null]}"""), "Path parameter 'scope'")
     }
 
